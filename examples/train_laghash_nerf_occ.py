@@ -46,6 +46,7 @@ _HYDRA_PARAMS = {
     "config_path": "../config/",
     "config_name": "synthetic_occ.yaml",
 }
+
 # A logger for this file
 log = logging.getLogger(__name__)
 
@@ -122,6 +123,61 @@ def get_dataset_and_scene_parameters(cfg, init_batch_size, device):
         "white_bg": white_bg
     }
 
+def initialize_estimator(aabb, grid_resolution, grid_nlvl, device):
+    return OccGridEstimator(roi_aabb=aabb, resolution=grid_resolution, levels=grid_nlvl).to(device)
+
+def initialize_radiance_field(cfg, estimator, device):
+    std_decay_factor = (cfg.model.std_final_factor / cfg.model.std_init_factor) ** (cfg.trainer.size_decay_every/cfg.trainer.max_steps)
+    
+    radiance_field = LagHashRadianceField(
+        aabb=estimator.aabbs[-1], 
+        log2_hashmap_size=cfg.model.log2_hashmap_size, 
+        num_splashes=cfg.model.num_splashes,
+        max_resolution=cfg.model.max_resolution, 
+        std_init_factor=cfg.model.std_init_factor,
+        fixed_std=cfg.model.fixed_std,
+        decay_factor=std_decay_factor, 
+        splits=cfg.model.splits
+    ).to(device)
+
+    if cfg.model.load_model_path != "":
+        state = torch.load(cfg.model.load_model_path, map_location=device)
+        radiance_field.load_state_dict(state['model'])
+        estimator.load_state_dict(state['occupancy'])
+        checkpoint_steps = state['steps']
+        log.info(f"Loaded model from {cfg.model.load_model_path}")
+    
+    return radiance_field
+
+def initialize_optimizer(cfg, radiance_field, weight_decay):
+    params_dict = { name : param for name, param in radiance_field.named_parameters()}
+    
+    gau_params, codebook_params, rest_params = [], [], []
+    for name in params_dict:
+        if ("means" in name) or ("stds" in name):
+            gau_params.append(params_dict[name])
+        elif "feats" in name:
+            codebook_params.append(params_dict[name])
+        else:
+            rest_params.append(params_dict[name])
+
+    gau_lr = cfg.optimizer.learning_rate * cfg.optimizer.gaussian_factor
+    params = [
+        {"params": gau_params, "lr": gau_lr, "eps": cfg.optimizer.eps, "weight_decay": 0.0},
+        {"params": codebook_params, "lr": cfg.optimizer.learning_rate, "eps": cfg.optimizer.eps, "weight_decay": weight_decay},
+        {"params": rest_params, "lr": cfg.optimizer.learning_rate, "eps": cfg.optimizer.eps, "weight_decay": weight_decay}
+    ]
+    
+    return torch.optim.Adam(params)
+
+def initialize_scheduler(cfg, optimizer):
+    return torch.optim.lr_scheduler.ChainedScheduler(
+        [
+            torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, total_iters=100),
+            torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[int(m*cfg.trainer.max_steps) for m in cfg.scheduler.milestones], gamma=cfg.scheduler.gamma),
+        ]
+    )
+
 @hydra.main(**_HYDRA_PARAMS)
 def run(cfg: DictConfig):
     device = cfg.device
@@ -165,66 +221,18 @@ def run(cfg: DictConfig):
         logging.error(error_message)
         raise ValueError(error_message)
 
-
-    estimator = OccGridEstimator(roi_aabb=aabb, resolution=grid_resolution, 
-                                 levels=grid_nlvl).to(device)
+    estimator = initialize_estimator(aabb, grid_resolution, grid_nlvl, device)
 
     # setup the radiance field we want to train.
     grad_scaler = torch.cuda.amp.GradScaler(2**10)
-    std_decay_factor = (cfg.model.std_final_factor / cfg.model.std_init_factor) ** (cfg.trainer.size_decay_every/cfg.trainer.max_steps)
-    radiance_field = LagHashRadianceField(aabb=estimator.aabbs[-1], 
-                                          log2_hashmap_size=cfg.model.log2_hashmap_size, 
-                                          num_splashes=cfg.model.num_splashes,
-                                          max_resolution=cfg.model.max_resolution, 
-                                          std_init_factor=cfg.model.std_init_factor,
-                                          fixed_std=cfg.model.fixed_std,
-                                          decay_factor=std_decay_factor, 
-                                          splits=cfg.model.splits).to(device)
-    if cfg.model.load_model_path != "":
-        state = torch.load(cfg.model.load_model_path, map_location=device)
-        radiance_field.load_state_dict(state['model'])
-        estimator.load_state_dict(state['occupancy'])
-        checkpoint_steps = state['steps']
-        log.info(f"Loaded model from {cfg.model.load_model_path}")
+    radiance_field = initialize_radiance_field(cfg, estimator, device)
+
     num_params = sum(p.numel() for p in radiance_field.parameters() if p.requires_grad)
     log.info(f"Number of parameters: {num_params/1e6:.2f}M")
-    params_dict = { name : param for name, param in radiance_field.named_parameters()}
-    codebook_params = []
-    gau_params = []
-    rest_params = []
-    for name in params_dict:
-        if ("means" in name) or ("stds" in name):
-            gau_params.append(params_dict[name])
-        elif "feats" in name:
-            codebook_params.append(params_dict[name])
-        else:
-            rest_params.append(params_dict[name])
     
-    params = []
-    gau_lr = cfg.optimizer.learning_rate*cfg.optimizer.gaussian_factor
-    params.append({"params": gau_params, "lr": gau_lr,
-                   "eps": cfg.optimizer.eps, "weight_decay": 0.0})
-    params.append({"params": codebook_params, "lr": cfg.optimizer.learning_rate,
-                   "eps": cfg.optimizer.eps, "weight_decay": weight_decay})
-    params.append({"params": rest_params, "lr": cfg.optimizer.learning_rate, 
-                   "eps": cfg.optimizer.eps, "weight_decay": weight_decay}) # 
-    optimizer = torch.optim.Adam(params)
-    scheduler = torch.optim.lr_scheduler.ChainedScheduler(
-        [
-            torch.optim.lr_scheduler.LinearLR(
-                optimizer, start_factor=0.01, total_iters=100
-            ),
-            torch.optim.lr_scheduler.MultiStepLR(
-                optimizer,
-                milestones=[int(m*max_steps) for m in cfg.scheduler.milestones],
-                gamma=cfg.scheduler.gamma,
-            ),
-        ]
-    )
-    # lpips_net = LPIPS(net="vgg").to(device)
-    # lpips_norm_fn = lambda x: x[None, ...].permute(0, 3, 1, 2) * 2 - 1
-    # lpips_fn = lambda x, y: lpips_net(lpips_norm_fn(x), lpips_norm_fn(y)).mean()
-
+    optimizer = initialize_optimizer(cfg, radiance_field, weight_decay)
+    scheduler = initialize_scheduler(cfg, optimizer)
+    
     # training
     tic = time.time()
     for step in range(max_steps + 1):
@@ -261,6 +269,7 @@ def run(cfg: DictConfig):
             cone_angle=cone_angle,
             alpha_thre=alpha_thre,
         )
+
         if n_rendering_samples == 0:
             continue
 
@@ -306,12 +315,6 @@ def run(cfg: DictConfig):
 
         if (step % cfg.trainer.size_decay_every == cfg.trainer.size_decay_every-1) and cfg.model.fixed_std:
             radiance_field.mlp_base.encoding.update_factor()
-
-        # if step % cfg.trainer.log_every == 0:
-        #     writer.add_scalar("train/rgb_loss", rgb_loss, step)
-        #     writer.add_scalar("train/surface_loss", surf_loss, step)
-        #     writer.add_scalar("train/sigma_loss", sigma_loss, step)
-        #     writer.add_scalar("train/mip_loss", mip_loss, step)
 
         if step % cfg.trainer.save_every == 0:
             state_dict = {
@@ -369,13 +372,11 @@ def run(cfg: DictConfig):
                 f"max_depth={depth.max():.3f} | "
             )
 
-
     # evaluation
     radiance_field.eval()
     estimator.eval()
 
     psnrs = []
-    # lpips = []
     with torch.no_grad():
         for i in tqdm.tqdm(range(len(test_dataset))):
             data = test_dataset[i]
@@ -397,26 +398,17 @@ def run(cfg: DictConfig):
             mse = F.mse_loss(rgb, pixels)
             psnr = -10.0 * torch.log(mse) / np.log(10.0)
             psnrs.append(psnr.item())
-            # lpips.append(lpips_fn(rgb, pixels).item())
             imageio.imwrite(
                 f"{output_path}/test/rgb_test_{i}.png",
                 (rgb.cpu().numpy() * 255).astype(np.uint8),
             )
-            # imageio.imwrite(
-            #     f"{output_path}/rgb_error_{i}.png",
-            #     (
-            #         (rgb - pixels).norm(dim=-1).cpu().numpy() * 255
-            #     ).astype(np.uint8),
-            # )
-    psnr_avg = sum(psnrs) / len(psnrs)
-    # lpips_avg = sum(lpips) / len(lpips)
-    logging.info(f"evaluation: psnr_avg={psnr_avg}") # , lpips_avg={lpips_avg}
-    writer.add_scalar("test/psnr", psnr_avg, max_steps)
-    # writer.add_scalar("test/lpips", lpips_avg, max_steps)
-    with open(f"{output_path}/metrics.txt", "w") as fp:
-        fp.write(f"PSNR:{psnr_avg:.3f}") # , LPIPS:{lpips_avg:.3f}
-    writer.close()
 
+    psnr_avg = sum(psnrs) / len(psnrs)
+    logging.info(f"evaluation: psnr_avg={psnr_avg}")
+    writer.add_scalar("test/psnr", psnr_avg, max_steps)
+    with open(f"{output_path}/metrics.txt", "w") as fp:
+        fp.write(f"PSNR:{psnr_avg:.3f}")
+    writer.close()
 
 if __name__ == "__main__":
     run()
