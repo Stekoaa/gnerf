@@ -2,31 +2,38 @@
 Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
 
-import os
-import math
-import numpy as np
-import imageio
-import time
-import trimesh
-import tqdm
-# from lpips import LPIPS
-from arrgh import arrgh
 import logging
-import hydra
-from hydra.utils import to_absolute_path
-from omegaconf import DictConfig
+import math
+import os
+import time
 import warnings
-warnings.filterwarnings("ignore")
 
+import hydra
+import imageio
+import numpy as np
 import torch
 import torch.nn.functional as F
+import trimesh
+import tqdm
+from hydra.utils import to_absolute_path
+from omegaconf import DictConfig
 from torch.utils.tensorboard import SummaryWriter
 
-from radiance_fields.laghash import LagHashRadianceField
-from datasets.tanks_and_temples import TanksTempleDataset
+from arrgh import arrgh
 from datasets.nerf_synthetic import SubjectLoader
-from examples.utils import TANKS_TEMPLE_SCENES, NERF_SYNTHETIC_SCENES, render_image_with_occgrid, set_random_seed
+from datasets.tanks_and_temples import TanksTempleDataset
+from examples.utils import (
+    NERF_SYNTHETIC_SCENES,
+    TANKS_TEMPLE_SCENES,
+    render_image_with_occgrid,
+    set_random_seed,
+)
 from nerfacc.estimators.occ_grid import OccGridEstimator
+from radiance_fields.laghash import LagHashRadianceField
+
+# Disable warnings
+warnings.filterwarnings("ignore")
+
 
 _HYDRA_PARAMS = {
     "version_base": "1.3",
@@ -36,24 +43,78 @@ _HYDRA_PARAMS = {
 # A logger for this file
 log = logging.getLogger(__name__)
 
-
-@hydra.main(**_HYDRA_PARAMS)
-def run(cfg: DictConfig):
-    device = cfg.device
-    set_random_seed(42)
+def initialize_output():
     hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
     output_path = hydra_cfg['runtime']['output_dir']
     log.info(f"Saving outputs in: {to_absolute_path(output_path)}")
-    writer = SummaryWriter(output_path, purge_step=0)
     os.makedirs(os.path.join(output_path, 'test'), exist_ok=True)
+    writer = SummaryWriter(output_path, purge_step=0)
+    return writer, output_path
 
-    if cfg.dataset.scene in TANKS_TEMPLE_SCENES:
-
-        # training parameters
-        max_steps = cfg.trainer.max_steps
-        init_batch_size = cfg.dataset.init_batch_size
-        target_sample_batch_size = 1 << 18
+def get_training_params(cfg, scene):
+    if scene in TANKS_TEMPLE_SCENES:
         weight_decay = cfg.optimizer.weight_decay
+    else:
+        weight_decay = (
+            1e-5 if scene in ["materials", "ficus", "drums"]
+            else 1e-6
+        )
+    
+    return {
+        "max_steps": cfg.trainer.max_steps,
+        "init_batch_size": cfg.dataset.init_batch_size,
+        "target_sample_batch_size": 1 << 18,
+        "weight_decay": weight_decay,
+    }
+
+def get_occupancy_params(cfg):
+    return {
+        "grid_resolution": cfg.occupancy.grid_resolution,
+        "grid_nlvl": cfg.occupancy.grid_nlvl,
+    }
+
+def get_render_parameters(cfg):
+    return {
+        "render_step_size": cfg.render.render_step_size,
+        "alpha_thre": cfg.render.alpha_thre,
+        "cone_angle": cfg.render.cone_angle,
+    }
+
+@hydra.main(**_HYDRA_PARAMS)
+def run(cfg: DictConfig)
+    device = cfg.device
+    set_random_seed(42)
+    
+    writer, output_path = initialize_output()
+
+    if cfg.dataset.scene in TANKS_TEMPLE_SCENES or cfg.dataset.scene in NERF_SYNTHETIC_SCENES:
+        train_params = get_training_params(cfg, cfg.dataset.scene)
+        max_steps, init_batch_size, target_sample_batch_size, weight_decay = (
+            train_params["max_steps"],
+            train_params["init_batch_size"], 
+            train_params["target_sample_batch_size"], 
+            train_params["weight_decay"]
+        )
+
+        
+        occupancy_params = get_occupancy_params(cfg)
+        grid_resolution, grid_nlvl = occupancy_params(
+            occupancy_params["grid_resolution"],
+            occupancy_params["grid_nlvl"]
+        )
+
+        render_params = get_render_parameters(cfg)
+        render_step_size, alpha_thre, cone_angle = (
+            render_params["render_step_size"],
+            render_params["alpha_thre"],
+            render_params["cone_angle"]
+        )
+
+        # # training parameters
+        # max_steps = cfg.trainer.max_steps
+        # init_batch_size = cfg.dataset.init_batch_size
+        # target_sample_batch_size = 1 << 18
+        # weight_decay = cfg.optimizer.weight_decay
         # dataset parameters
         data_path = os.path.join(cfg.dataset.data_root, cfg.dataset.scene)
         train_dataset = TanksTempleDataset(data_path, split='train', downsample=1,
@@ -75,13 +136,13 @@ def run(cfg: DictConfig):
 
     elif cfg.dataset.scene in NERF_SYNTHETIC_SCENES:
 
-        # training parameters
-        max_steps = cfg.trainer.max_steps
-        init_batch_size = cfg.dataset.init_batch_size
-        target_sample_batch_size = 1 << 18
-        weight_decay = (
-            1e-5 if cfg.dataset.scene in ["materials", "ficus", "drums"] else 1e-6
-        )
+        # # training parameters
+        # max_steps = cfg.trainer.max_steps
+        # init_batch_size = cfg.dataset.init_batch_size
+        # target_sample_batch_size = 1 << 18
+        # weight_decay = (
+        #     1e-5 if cfg.dataset.scene in ["materials", "ficus", "drums"] else 1e-6
+        # )
         # dataset parameters
         train_dataset_kwargs = {}
         test_dataset_kwargs = {}
