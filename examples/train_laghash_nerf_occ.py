@@ -5,6 +5,7 @@ Copyright (c) 2022 Ruilong Li, UC Berkeley.
 import logging
 import math
 import os
+import sys
 import time
 import warnings
 
@@ -22,18 +23,23 @@ from torch.utils.tensorboard import SummaryWriter
 from arrgh import arrgh
 from datasets.nerf_synthetic import SubjectLoader
 from datasets.tanks_and_temples import TanksTempleDataset
+
+home_dir = os.path.expanduser('~')
+project_root = os.path.join(home_dir, 'gnerf')
+sys.path.append(project_root)
+
 from examples.utils import (
     NERF_SYNTHETIC_SCENES,
     TANKS_TEMPLE_SCENES,
     render_image_with_occgrid,
     set_random_seed,
+    append_sys_path
 )
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from radiance_fields.laghash import LagHashRadianceField
 
 # Disable warnings
 warnings.filterwarnings("ignore")
-
 
 _HYDRA_PARAMS = {
     "version_base": "1.3",
@@ -80,8 +86,44 @@ def get_render_parameters(cfg):
         "cone_angle": cfg.render.cone_angle,
     }
 
+def get_dataset_and_scene_parameters(cfg, init_batch_size, device):
+    scene = cfg.dataset.scene
+    data_path = os.path.join(cfg.dataset.data_root, scene)
+    if scene in TANKS_TEMPLE_SCENES:
+        train_dataset = TanksTempleDataset(
+            data_path, split="train", downsample=1, is_stack=False, num_rays=init_batch_size
+        )
+        test_dataset = TanksTempleDataset(
+            data_path, split="test", downsample=1, is_stack=True, num_rays=None
+        )
+        aabb = train_dataset.scene_bbox.to(device).view(-1)
+        near_plane, far_plane = train_dataset.near_far
+        white_bg = train_dataset.white_bg
+    else:
+        train_dataset = SubjectLoader(
+            subject_id=scene, root_fp=cfg.dataset.data_root,
+            split="train", num_rays=init_batch_size, device=device
+        )
+        test_dataset = SubjectLoader(
+            subject_id=scene, root_fp=cfg.dataset.data_root,
+            split="test", num_rays=None, device=device
+        )
+        aabb = torch.tensor(cfg.scene.aabb, device=device)
+        near_plane = cfg.scene.near_plane
+        far_plane = cfg.scene.far_plane
+        white_bg = None
+
+    return {
+        "train_dataset": train_dataset, 
+        "test_dataset": test_dataset, 
+        "aabb": aabb, 
+        "near_plane": near_plane, 
+        "far_plane": far_plane, 
+        "white_bg": white_bg
+    }
+
 @hydra.main(**_HYDRA_PARAMS)
-def run(cfg: DictConfig)
+def run(cfg: DictConfig):
     device = cfg.device
     set_random_seed(42)
     
@@ -95,10 +137,9 @@ def run(cfg: DictConfig)
             train_params["target_sample_batch_size"], 
             train_params["weight_decay"]
         )
-
         
         occupancy_params = get_occupancy_params(cfg)
-        grid_resolution, grid_nlvl = occupancy_params(
+        grid_resolution, grid_nlvl = (
             occupancy_params["grid_resolution"],
             occupancy_params["grid_nlvl"]
         )
@@ -110,62 +151,19 @@ def run(cfg: DictConfig)
             render_params["cone_angle"]
         )
 
-        # # training parameters
-        # max_steps = cfg.trainer.max_steps
-        # init_batch_size = cfg.dataset.init_batch_size
-        # target_sample_batch_size = 1 << 18
-        # weight_decay = cfg.optimizer.weight_decay
-        # dataset parameters
-        data_path = os.path.join(cfg.dataset.data_root, cfg.dataset.scene)
-        train_dataset = TanksTempleDataset(data_path, split='train', downsample=1,
-                                            is_stack=False, num_rays=init_batch_size)
-        test_dataset = TanksTempleDataset(data_path, split='test', downsample=1, 
-                                          is_stack=True, num_rays=None)
-        # scene parameters        
-        aabb = train_dataset.scene_bbox.to(device).view(-1)
-        near_plane = train_dataset.near_far[0]
-        far_plane = train_dataset.near_far[1]
-        white_bg = train_dataset.white_bg
-        # occupancy parameters
-        grid_resolution = cfg.occupancy.grid_resolution
-        grid_nlvl = cfg.occupancy.grid_nlvl
-        # render parameters
-        render_step_size = cfg.render.render_step_size
-        alpha_thre = cfg.render.alpha_thre
-        cone_angle = cfg.render.cone_angle
-
-    elif cfg.dataset.scene in NERF_SYNTHETIC_SCENES:
-
-        # # training parameters
-        # max_steps = cfg.trainer.max_steps
-        # init_batch_size = cfg.dataset.init_batch_size
-        # target_sample_batch_size = 1 << 18
-        # weight_decay = (
-        #     1e-5 if cfg.dataset.scene in ["materials", "ficus", "drums"] else 1e-6
-        # )
-        # dataset parameters
-        train_dataset_kwargs = {}
-        test_dataset_kwargs = {}
-        train_dataset = SubjectLoader(subject_id=cfg.dataset.scene, root_fp=cfg.dataset.data_root, 
-                                      split="train", num_rays=init_batch_size, device=device, 
-                                      **train_dataset_kwargs,)
-        test_dataset = SubjectLoader(subject_id=cfg.dataset.scene, root_fp=cfg.dataset.data_root, 
-                                     split="test", num_rays=None, device=device, **test_dataset_kwargs,)
-        # scene parameters
-        aabb = torch.tensor(cfg.scene.aabb, device=device)
-        near_plane = cfg.scene.near_plane
-        far_plane = cfg.scene.far_plane
-        # occupancy parameters
-        grid_resolution = cfg.occupancy.grid_resolution
-        grid_nlvl = cfg.occupancy.grid_nlvl
-        # render parameters
-        render_step_size = cfg.render.render_step_size
-        alpha_thre = cfg.render.alpha_thre
-        cone_angle = cfg.render.cone_angle
-
+        dataset_params = get_dataset_and_scene_parameters(cfg, init_batch_size, device)
+        train_dataset, test_dataset, aabb, near_plane, far_plane, white_bg = (
+            dataset_params["train_dataset"],
+            dataset_params["test_dataset"],
+            dataset_params["aabb"],
+            dataset_params["near_plane"],
+            dataset_params["far_plane"],
+            dataset_params["white_bg"]
+        )
     else:
-        logging.error(f"Invalid scene: {cfg.dataset.scene}")
-        assert(0)
+        error_message = f"Invalid scene: {cfg.dataset.scene}"
+        logging.error(error_message)
+        raise ValueError(error_message)
 
 
     estimator = OccGridEstimator(roi_aabb=aabb, resolution=grid_resolution, 

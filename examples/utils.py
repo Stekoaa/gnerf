@@ -2,7 +2,9 @@
 Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
 
+import os
 import random
+import sys
 from typing import Optional, Sequence
 from arrgh import arrgh
 
@@ -53,6 +55,10 @@ TANKS_TEMPLE_SCENES = [
     "Truck",
 ]
 
+def append_sys_path():
+    home_dir = os.path.expanduser('~')
+    project_root = os.path.join(home_dir, 'gnerf')
+    sys.path.append(project_root)
 
 def set_random_seed(seed):
     random.seed(seed)

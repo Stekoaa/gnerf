@@ -7,7 +7,9 @@ import torch
 import torch.nn as nn
 
 import laghash.ops.grid as grid_ops
+from examples.utils import append_sys_path
 
+append_sys_path()
 
 class SplashEncoding(nn.Module):
     def __init__(
