@@ -3,7 +3,6 @@ Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
 
 import logging
-import math
 import os
 import sys
 import time
@@ -48,8 +47,10 @@ log = logging.getLogger(__name__)
 def initialize_output():
     hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
     output_path = hydra_cfg['runtime']['output_dir']
+    
     log.info(f"Saving outputs in: {to_absolute_path(output_path)}")
     os.makedirs(os.path.join(output_path, 'test'), exist_ok=True)
+    
     writer = SummaryWriter(output_path, purge_step=0)
     return writer, output_path
 
@@ -65,7 +66,6 @@ def get_training_params(cfg):
     
     return {
         "max_steps": cfg.trainer.max_steps,
-        "init_batch_size": cfg.dataset.init_batch_size,
         "target_sample_batch_size": 1 << 18,
         "weight_decay": weight_decay,
     }
@@ -83,10 +83,12 @@ def get_render_parameters(cfg):
         "cone_angle": cfg.render.cone_angle,
     }
 
-def get_dataset_and_scene_parameters(cfg, init_batch_size, device):
+def get_dataset_and_scene_parameters(cfg, device):
     scene = cfg.dataset.scene
-    data_path = os.path.join(cfg.dataset.data_root, scene)
+    init_batch_size = cfg.dataset.init_batch_size
+    
     if scene in TANKS_TEMPLE_SCENES:
+        data_path = os.path.join(cfg.dataset.data_root, scene)
         train_dataset = TanksTempleDataset(
             data_path, split="train", downsample=1, is_stack=False, num_rays=init_batch_size
         )
@@ -188,9 +190,8 @@ def run(cfg: DictConfig):
 
     if cfg.dataset.scene in TANKS_TEMPLE_SCENES or cfg.dataset.scene in NERF_SYNTHETIC_SCENES:
         train_params = get_training_params(cfg.dataset.scene)
-        max_steps, init_batch_size, target_sample_batch_size, weight_decay = (
+        max_steps, target_sample_batch_size, weight_decay = (
             train_params["max_steps"],
-            train_params["init_batch_size"], 
             train_params["target_sample_batch_size"], 
             train_params["weight_decay"]
         )
@@ -208,7 +209,7 @@ def run(cfg: DictConfig):
             render_params["cone_angle"]
         )
 
-        dataset_params = get_dataset_and_scene_parameters(cfg, init_batch_size, device)
+        dataset_params = get_dataset_and_scene_parameters(cfg, device)
         train_dataset, test_dataset, aabb, near_plane, far_plane, white_bg = (
             dataset_params["train_dataset"],
             dataset_params["test_dataset"],
@@ -235,8 +236,9 @@ def run(cfg: DictConfig):
     scheduler = initialize_scheduler(cfg, optimizer)
     
     # training
+    log.info('Starting training')
     tic = time.time()
-    for step in range(max_steps + 1):
+    for step in tqdm(range(max_steps + 1), desc="Training"):
         radiance_field.train()
         estimator.train()
 
@@ -287,7 +289,7 @@ def run(cfg: DictConfig):
             if stds is not None:
                 sigma_loss += calculate_lod_sigma_loss(resolution, stds)
                 i += 1
-        if i:
+        if i > 0:
             sigma_loss /= i
             surf_loss = kl_div.mean()
 
@@ -305,6 +307,16 @@ def run(cfg: DictConfig):
         optimizer.step()
         scheduler.step()
 
+        if step % cfg.trainer.log_every == 0:
+            elapsed_time = time.time() - tic
+            log.info(
+                f"Training info: "
+                f"step={step} | elapsed_time={elapsed_time:.2f}s | "
+                f"whole_loss={loss:.5f} | surf_loss={surf_loss:.5f} | " 
+                f"sigma_loss={sigma_loss:.5f} | n_rendering_samples={n_rendering_samples:d} | "
+                f"max_depth={depth.max():.3f} | "
+            )
+        
         if (step % cfg.trainer.size_decay_every == cfg.trainer.size_decay_every-1) and cfg.model.fixed_std:
             radiance_field.mlp_base.encoding.update_factor()
 
@@ -315,64 +327,57 @@ def run(cfg: DictConfig):
                 "occupancy": estimator.state_dict(),
                 "optimizer": optimizer.state_dict(),
             }
-            torch.save(state_dict, f"{output_path}/model.pth")
-
+            
+            model_output_path = f"{output_path}/model.pth"
+            torch.save(state_dict, model_output_path)
+            log.info(f"Model saved to {model_output_path}")
+            
             for idx in range(radiance_field.n_levels):
                 means = radiance_field.mlp_base.encoding.get_means(idx)
                 if means is not None:
                     means = means.reshape(-1, means.shape[-1])
-
                     means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
-                    if step:
+                    if step > 0:
                         os.remove(os.path.join(output_path, f'means_lod{idx}@{step-cfg.trainer.save_every:05d}.ply'))
-                    means_cloud.export(os.path.join(output_path, f'means_lod{idx}@{step:05d}.ply')) # 
+                    
+                    means_lod_path = os.path.join(output_path, f'means_lod{idx}@{step:05d}.ply')
+                    means_cloud.export(means_lod_path)
+                    log.info(f"Means saved to {means_lod_path}")
+        
+        if step % cfg.trainer.visualize_every == 0 and step > 0:
+            log.info("Starting validation")
+            radiance_field.eval()
+            estimator.eval()
 
-        if step % cfg.trainer.visualize_every == 0:
-            if step:
-                # evaluation
-                radiance_field.eval()
-                estimator.eval()
-
-                with torch.no_grad():
-                    data = test_dataset[0]
-                    render_bkgd, rays, pixels = retrieve_image_data(data)
-
-                    rgb, _, _, _, _, _ = render_image_with_occgrid(
-                        radiance_field,
-                        estimator,
-                        rays,
-                        # rendering options
-                        near_plane=near_plane,
-                        render_step_size=render_step_size,
-                        render_bkgd=render_bkgd,
-                        cone_angle=cone_angle,
-                        alpha_thre=alpha_thre,
-                    )
-                    visualize = torch.concatenate([rgb, pixels], dim=1)
-                    writer.add_image("visual/rgb", visualize,  step, dataformats="HWC")
-            
-            elapsed_time = time.time() - tic
+            with torch.no_grad():
+                data = test_dataset[0]
+                render_bkgd, rays, pixels = retrieve_image_data(data)
+                rgb, _, _, _, _, _ = render_image_with_occgrid(
+                    radiance_field,
+                    estimator,
+                    rays,
+                    # rendering options
+                    near_plane=near_plane,
+                    render_step_size=render_step_size,
+                    render_bkgd=render_bkgd,
+                    cone_angle=cone_angle,
+                    alpha_thre=alpha_thre,
+                )
+                visualize = torch.concatenate([rgb, pixels], dim=1)
+                writer.add_image("visual/rgb", visualize,  step, dataformats="HWC")
+                
             psnr = calculate_psnr(rgb, pixels)
-            
-            log.info(
-                f"elapsed_time={elapsed_time:.2f}s | step={step} | "
-                f"psnr={psnr:.2f} | loss={loss:.5f} | "
-                f"surf_loss={surf_loss:.5f} | "
-                f"sigma_loss={sigma_loss:.5f} | "
-                f"n_rendering_samples={n_rendering_samples:d} | num_rays={len(pixels):d} | "
-                f"max_depth={depth.max():.3f} | "
-            )
+            log.info(f"Validation: psnr={psnr:.2f}")
 
     # evaluation
+    log.info('Starting evaluation')
+    
     radiance_field.eval()
     estimator.eval()
-
     psnrs = []
     with torch.no_grad():
-        for i in tqdm.tqdm(range(len(test_dataset))):
-            data = test_dataset[i]
+        for idx, data in enumerate(tqdm(test_dataset, total=len(test_dataset), desc="Evaluation")):
             render_bkgd, rays, pixels = retrieve_image_data(data)
-
             rgb, _, _, _, _, _ = render_image_with_occgrid(
                 radiance_field,
                 estimator,
@@ -392,10 +397,10 @@ def run(cfg: DictConfig):
             )
 
     psnr_avg = sum(psnrs) / len(psnrs)
-    logging.info(f"evaluation: psnr_avg={psnr_avg}")
-    writer.add_scalar("test/psnr", psnr_avg, max_steps)
+    logging.info(f"Evaluation: psnr_avg={psnr_avg}")
     with open(f"{output_path}/metrics.txt", "w") as fp:
         fp.write(f"PSNR:{psnr_avg:.3f}")
+    writer.add_scalar("test/psnr", psnr_avg, max_steps)
     writer.close()
 
 if __name__ == "__main__":
