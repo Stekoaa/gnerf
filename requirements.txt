@@ -11,3 +11,4 @@ arrgh
 kornia
 trimesh
 hydra-core
+torchmetrics

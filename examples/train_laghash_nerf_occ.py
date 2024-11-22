@@ -20,21 +20,15 @@ from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 from torch.utils.tensorboard import SummaryWriter
 
-from arrgh import arrgh
-from datasets.nerf_synthetic import SubjectLoader
-from datasets.tanks_and_temples import TanksTempleDataset
-
 home_dir = os.path.expanduser('~')
 project_root = os.path.join(home_dir, 'gnerf')
 sys.path.append(project_root)
 
-from examples.utils import (
-    NERF_SYNTHETIC_SCENES,
-    TANKS_TEMPLE_SCENES,
-    render_image_with_occgrid,
-    set_random_seed,
-    append_sys_path
-)
+from datasets.nerf_synthetic import SubjectLoader
+from datasets.tanks_and_temples import TanksTempleDataset
+from examples.utils.general_utils import set_random_seed, TANKS_TEMPLE_SCENES, NERF_SYNTHETIC_SCENES
+from examples.utils.metric_utils import calculate_psnr
+from examples.utils.render_utils import render_image_with_occgrid
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from radiance_fields.laghash import LagHashRadianceField
 
@@ -58,7 +52,8 @@ def initialize_output():
     writer = SummaryWriter(output_path, purge_step=0)
     return writer, output_path
 
-def get_training_params(cfg, scene):
+def get_training_params(cfg):
+    scene = cfg.dataset.scene
     if scene in TANKS_TEMPLE_SCENES:
         weight_decay = cfg.optimizer.weight_decay
     else:
@@ -144,7 +139,6 @@ def initialize_radiance_field(cfg, estimator, device):
         state = torch.load(cfg.model.load_model_path, map_location=device)
         radiance_field.load_state_dict(state['model'])
         estimator.load_state_dict(state['occupancy'])
-        checkpoint_steps = state['steps']
         log.info(f"Loaded model from {cfg.model.load_model_path}")
     
     return radiance_field
@@ -178,6 +172,12 @@ def initialize_scheduler(cfg, optimizer):
         ]
     )
 
+def retrieve_image_data(img):
+    render_bkgd = img["color_bkgd"]
+    rays = img["rays"]
+    pixels = img["pixels"]
+    return render_bkgd, rays, pixels
+
 @hydra.main(**_HYDRA_PARAMS)
 def run(cfg: DictConfig):
     device = cfg.device
@@ -186,7 +186,7 @@ def run(cfg: DictConfig):
     writer, output_path = initialize_output()
 
     if cfg.dataset.scene in TANKS_TEMPLE_SCENES or cfg.dataset.scene in NERF_SYNTHETIC_SCENES:
-        train_params = get_training_params(cfg, cfg.dataset.scene)
+        train_params = get_training_params(cfg.dataset.scene)
         max_steps, init_batch_size, target_sample_batch_size, weight_decay = (
             train_params["max_steps"],
             train_params["init_batch_size"], 
@@ -242,9 +242,7 @@ def run(cfg: DictConfig):
         i = torch.randint(0, len(train_dataset), (1,)).item()
         data = train_dataset[i]
 
-        render_bkgd = data["color_bkgd"]
-        rays = data["rays"]
-        pixels = data["pixels"]
+        render_bkgd, rays, pixels = retrieve_image_data(data)
 
         def occ_eval_fn(x):
             density = radiance_field.query_density(x)
@@ -343,9 +341,7 @@ def run(cfg: DictConfig):
 
                 with torch.no_grad():
                     data = test_dataset[0]
-                    render_bkgd = data["color_bkgd"]
-                    rays = data["rays"]
-                    pixels = data["pixels"]
+                    render_bkgd, rays, pixels = retrieve_image_data(data)
 
                     rgb, acc, depth, kl_div, _, mip_loss = render_image_with_occgrid(
                         radiance_field,
@@ -360,9 +356,9 @@ def run(cfg: DictConfig):
                     )
                     visualize = torch.concatenate([rgb, pixels], dim=1)
                     writer.add_image("visual/rgb", visualize,  step, dataformats="HWC")
+            
             elapsed_time = time.time() - tic
-            loss = F.mse_loss(rgb, pixels)
-            psnr = -10.0 * torch.log(loss) / np.log(10.0)
+            psnr = calculate_psnr(rgb, pixels)
             log.info(
                 f"elapsed_time={elapsed_time:.2f}s | step={step} | "
                 f"psnr={psnr:.2f} | loss={rgb_loss:.5f} | "
@@ -380,9 +376,7 @@ def run(cfg: DictConfig):
     with torch.no_grad():
         for i in tqdm.tqdm(range(len(test_dataset))):
             data = test_dataset[i]
-            render_bkgd = data["color_bkgd"]
-            rays = data["rays"]
-            pixels = data["pixels"]
+            render_bkgd, rays, pixels = retrieve_image_data(data)
 
             rgb, acc, depth, kl_div, _, mip_loss = render_image_with_occgrid(
                 radiance_field,
@@ -395,9 +389,8 @@ def run(cfg: DictConfig):
                 cone_angle=cone_angle,
                 alpha_thre=alpha_thre,
             )
-            mse = F.mse_loss(rgb, pixels)
-            psnr = -10.0 * torch.log(mse) / np.log(10.0)
-            psnrs.append(psnr.item())
+            
+            psnrs.append(calculate_psnr(rgb, pixels))
             imageio.imwrite(
                 f"{output_path}/test/rgb_test_{i}.png",
                 (rgb.cpu().numpy() * 255).astype(np.uint8),
