@@ -1,13 +1,12 @@
 from typing import List
 import math
 import numpy as np
-from arrgh import arrgh
 
 import torch
 import torch.nn as nn
 
 import laghash.ops.grid as grid_ops
-from examples.utils import append_sys_path
+from examples.utils.general_utils import append_sys_path
 
 append_sys_path()
 

@@ -27,6 +27,7 @@ sys.path.append(project_root)
 from datasets.nerf_synthetic import SubjectLoader
 from datasets.tanks_and_temples import TanksTempleDataset
 from examples.utils.general_utils import set_random_seed, TANKS_TEMPLE_SCENES, NERF_SYNTHETIC_SCENES
+from examples.utils.loss_utils import calculate_loss_warmup, calculate_lod_sigma_loss, calculate_smooth_l1_loss
 from examples.utils.metric_utils import calculate_psnr
 from examples.utils.render_utils import render_image_with_occgrid
 from nerfacc.estimators.occ_grid import OccGridEstimator
@@ -241,7 +242,6 @@ def run(cfg: DictConfig):
 
         i = torch.randint(0, len(train_dataset), (1,)).item()
         data = train_dataset[i]
-
         render_bkgd, rays, pixels = retrieve_image_data(data)
 
         def occ_eval_fn(x):
@@ -273,31 +273,25 @@ def run(cfg: DictConfig):
 
         if target_sample_batch_size > 0:
             # dynamic batch size for rays to keep sample batch size constant.
-            num_rays = len(pixels)
-            num_rays = int(
-                num_rays
-                * (target_sample_batch_size / float(n_rendering_samples))
-            )
+            num_rays = int(len(pixels) * (target_sample_batch_size / float(n_rendering_samples)))
             train_dataset.update_num_rays(num_rays)
 
         # compute loss
-        rgb_loss = F.smooth_l1_loss(rgb, pixels)
-        loss_warm_up = min(4*step/max_steps, math.exp(-4*step/max_steps))
+        loss_warm_up = calculate_loss_warmup(step, max_steps)
         mip_loss = mip_loss.mean()
         sigma_loss, surf_loss, i = 0, 0, 0
+        
         for idx in range(radiance_field.n_levels):
             resolution = radiance_field.mlp_base.encoding.resolutions[idx]
             stds = radiance_field.mlp_base.encoding.get_stds(idx)
             if stds is not None:
-                sigma_diff = F.relu(stds - 2/resolution)
-                lod_sigma_loss = torch.mean(sigma_diff)
-                sigma_loss += lod_sigma_loss
+                sigma_loss += calculate_lod_sigma_loss(resolution, stds)
                 i += 1
         if i:
             sigma_loss /= i
             surf_loss = kl_div.mean()
 
-        loss = rgb_loss
+        loss = calculate_smooth_l1_loss(rgb, pixels)
         if cfg.trainer.weight_surface:
             loss += cfg.trainer.weight_surface * loss_warm_up * surf_loss
         if cfg.trainer.weight_sigma and (not cfg.model.fixed_std):
@@ -343,7 +337,7 @@ def run(cfg: DictConfig):
                     data = test_dataset[0]
                     render_bkgd, rays, pixels = retrieve_image_data(data)
 
-                    rgb, acc, depth, kl_div, _, mip_loss = render_image_with_occgrid(
+                    rgb, _, _, _, _, _ = render_image_with_occgrid(
                         radiance_field,
                         estimator,
                         rays,
@@ -359,9 +353,10 @@ def run(cfg: DictConfig):
             
             elapsed_time = time.time() - tic
             psnr = calculate_psnr(rgb, pixels)
+            
             log.info(
                 f"elapsed_time={elapsed_time:.2f}s | step={step} | "
-                f"psnr={psnr:.2f} | loss={rgb_loss:.5f} | "
+                f"psnr={psnr:.2f} | loss={loss:.5f} | "
                 f"surf_loss={surf_loss:.5f} | "
                 f"sigma_loss={sigma_loss:.5f} | "
                 f"n_rendering_samples={n_rendering_samples:d} | num_rays={len(pixels):d} | "
@@ -378,7 +373,7 @@ def run(cfg: DictConfig):
             data = test_dataset[i]
             render_bkgd, rays, pixels = retrieve_image_data(data)
 
-            rgb, acc, depth, kl_div, _, mip_loss = render_image_with_occgrid(
+            rgb, _, _, _, _, _ = render_image_with_occgrid(
                 radiance_field,
                 estimator,
                 rays,
