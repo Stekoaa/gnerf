@@ -2,18 +2,13 @@
 Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
 
-import os
-import random
-import sys
 from typing import Optional, Sequence
-from arrgh import arrgh
 
 try:
     from typing import Literal
 except ImportError:
     from typing_extensions import Literal
 
-import numpy as np
 import torch
 from datasets.utils import Rays, namedtuple_map
 from torch.utils.data._utils.collate import collate, default_collate_fn_map
@@ -26,45 +21,7 @@ from nerfacc.volrend import (
     render_weight_from_density,
     rendering,
 )
-from nerfacc.losses import distortion, distortion_loss
-
-NERF_SYNTHETIC_SCENES = [
-    "chair",
-    "drums",
-    "ficus",
-    "hotdog",
-    "lego",
-    "materials",
-    "mic",
-    "ship",
-]
-MIPNERF360_UNBOUNDED_SCENES = [
-    "garden",
-    "bicycle",
-    "bonsai",
-    "counter",
-    "kitchen",
-    "room",
-    "stump",
-]
-TANKS_TEMPLE_SCENES = [
-    "Barn",
-    "Caterpillar",
-    "Family",
-    "Ignatius",
-    "Truck",
-]
-
-def append_sys_path():
-    home_dir = os.path.expanduser('~')
-    project_root = os.path.join(home_dir, 'gnerf')
-    sys.path.append(project_root)
-
-def set_random_seed(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
+from nerfacc.losses import distortion
 
 def render_image_with_occgrid(
     # scene

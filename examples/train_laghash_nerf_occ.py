@@ -3,7 +3,6 @@ Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
 
 import logging
-import math
 import os
 import sys
 import time
@@ -20,21 +19,16 @@ from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 from torch.utils.tensorboard import SummaryWriter
 
-from arrgh import arrgh
-from datasets.nerf_synthetic import SubjectLoader
-from datasets.tanks_and_temples import TanksTempleDataset
-
 home_dir = os.path.expanduser('~')
 project_root = os.path.join(home_dir, 'gnerf')
 sys.path.append(project_root)
 
-from examples.utils import (
-    NERF_SYNTHETIC_SCENES,
-    TANKS_TEMPLE_SCENES,
-    render_image_with_occgrid,
-    set_random_seed,
-    append_sys_path
-)
+from datasets.nerf_synthetic import SubjectLoader
+from datasets.tanks_and_temples import TanksTempleDataset
+from examples.utils.general_utils import set_random_seed, TANKS_TEMPLE_SCENES, NERF_SYNTHETIC_SCENES
+from examples.utils.loss_utils import calculate_loss_warmup, calculate_lod_sigma_loss, calculate_smooth_l1_loss
+from examples.utils.metric_utils import calculate_psnr
+from examples.utils.render_utils import render_image_with_occgrid
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from radiance_fields.laghash import LagHashRadianceField
 
@@ -53,12 +47,15 @@ log = logging.getLogger(__name__)
 def initialize_output():
     hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
     output_path = hydra_cfg['runtime']['output_dir']
+    
     log.info(f"Saving outputs in: {to_absolute_path(output_path)}")
     os.makedirs(os.path.join(output_path, 'test'), exist_ok=True)
+    
     writer = SummaryWriter(output_path, purge_step=0)
     return writer, output_path
 
-def get_training_params(cfg, scene):
+def get_training_params(cfg):
+    scene = cfg.dataset.scene
     if scene in TANKS_TEMPLE_SCENES:
         weight_decay = cfg.optimizer.weight_decay
     else:
@@ -69,7 +66,6 @@ def get_training_params(cfg, scene):
     
     return {
         "max_steps": cfg.trainer.max_steps,
-        "init_batch_size": cfg.dataset.init_batch_size,
         "target_sample_batch_size": 1 << 18,
         "weight_decay": weight_decay,
     }
@@ -87,10 +83,12 @@ def get_render_parameters(cfg):
         "cone_angle": cfg.render.cone_angle,
     }
 
-def get_dataset_and_scene_parameters(cfg, init_batch_size, device):
+def get_dataset_and_scene_parameters(cfg, device):
     scene = cfg.dataset.scene
-    data_path = os.path.join(cfg.dataset.data_root, scene)
+    init_batch_size = cfg.dataset.init_batch_size
+    
     if scene in TANKS_TEMPLE_SCENES:
+        data_path = os.path.join(cfg.dataset.data_root, scene)
         train_dataset = TanksTempleDataset(
             data_path, split="train", downsample=1, is_stack=False, num_rays=init_batch_size
         )
@@ -144,7 +142,6 @@ def initialize_radiance_field(cfg, estimator, device):
         state = torch.load(cfg.model.load_model_path, map_location=device)
         radiance_field.load_state_dict(state['model'])
         estimator.load_state_dict(state['occupancy'])
-        checkpoint_steps = state['steps']
         log.info(f"Loaded model from {cfg.model.load_model_path}")
     
     return radiance_field
@@ -178,6 +175,12 @@ def initialize_scheduler(cfg, optimizer):
         ]
     )
 
+def retrieve_image_data(img):
+    render_bkgd = img["color_bkgd"]
+    rays = img["rays"]
+    pixels = img["pixels"]
+    return render_bkgd, rays, pixels
+
 @hydra.main(**_HYDRA_PARAMS)
 def run(cfg: DictConfig):
     device = cfg.device
@@ -186,10 +189,9 @@ def run(cfg: DictConfig):
     writer, output_path = initialize_output()
 
     if cfg.dataset.scene in TANKS_TEMPLE_SCENES or cfg.dataset.scene in NERF_SYNTHETIC_SCENES:
-        train_params = get_training_params(cfg, cfg.dataset.scene)
-        max_steps, init_batch_size, target_sample_batch_size, weight_decay = (
+        train_params = get_training_params(cfg.dataset.scene)
+        max_steps, target_sample_batch_size, weight_decay = (
             train_params["max_steps"],
-            train_params["init_batch_size"], 
             train_params["target_sample_batch_size"], 
             train_params["weight_decay"]
         )
@@ -207,7 +209,7 @@ def run(cfg: DictConfig):
             render_params["cone_angle"]
         )
 
-        dataset_params = get_dataset_and_scene_parameters(cfg, init_batch_size, device)
+        dataset_params = get_dataset_and_scene_parameters(cfg, device)
         train_dataset, test_dataset, aabb, near_plane, far_plane, white_bg = (
             dataset_params["train_dataset"],
             dataset_params["test_dataset"],
@@ -234,17 +236,15 @@ def run(cfg: DictConfig):
     scheduler = initialize_scheduler(cfg, optimizer)
     
     # training
+    log.info('Starting training')
     tic = time.time()
-    for step in range(max_steps + 1):
+    for step in tqdm(range(max_steps + 1), desc="Training"):
         radiance_field.train()
         estimator.train()
 
         i = torch.randint(0, len(train_dataset), (1,)).item()
         data = train_dataset[i]
-
-        render_bkgd = data["color_bkgd"]
-        rays = data["rays"]
-        pixels = data["pixels"]
+        render_bkgd, rays, pixels = retrieve_image_data(data)
 
         def occ_eval_fn(x):
             density = radiance_field.query_density(x)
@@ -275,31 +275,25 @@ def run(cfg: DictConfig):
 
         if target_sample_batch_size > 0:
             # dynamic batch size for rays to keep sample batch size constant.
-            num_rays = len(pixels)
-            num_rays = int(
-                num_rays
-                * (target_sample_batch_size / float(n_rendering_samples))
-            )
+            num_rays = int(len(pixels) * (target_sample_batch_size / float(n_rendering_samples)))
             train_dataset.update_num_rays(num_rays)
 
         # compute loss
-        rgb_loss = F.smooth_l1_loss(rgb, pixels)
-        loss_warm_up = min(4*step/max_steps, math.exp(-4*step/max_steps))
+        loss_warm_up = calculate_loss_warmup(step, max_steps)
         mip_loss = mip_loss.mean()
         sigma_loss, surf_loss, i = 0, 0, 0
+        
         for idx in range(radiance_field.n_levels):
             resolution = radiance_field.mlp_base.encoding.resolutions[idx]
             stds = radiance_field.mlp_base.encoding.get_stds(idx)
             if stds is not None:
-                sigma_diff = F.relu(stds - 2/resolution)
-                lod_sigma_loss = torch.mean(sigma_diff)
-                sigma_loss += lod_sigma_loss
+                sigma_loss += calculate_lod_sigma_loss(resolution, stds)
                 i += 1
-        if i:
+        if i > 0:
             sigma_loss /= i
             surf_loss = kl_div.mean()
 
-        loss = rgb_loss
+        loss = calculate_smooth_l1_loss(rgb, pixels)
         if cfg.trainer.weight_surface:
             loss += cfg.trainer.weight_surface * loss_warm_up * surf_loss
         if cfg.trainer.weight_sigma and (not cfg.model.fixed_std):
@@ -313,6 +307,16 @@ def run(cfg: DictConfig):
         optimizer.step()
         scheduler.step()
 
+        if step % cfg.trainer.log_every == 0:
+            elapsed_time = time.time() - tic
+            log.info(
+                f"Training info: "
+                f"step={step} | elapsed_time={elapsed_time:.2f}s | "
+                f"whole_loss={loss:.5f} | surf_loss={surf_loss:.5f} | " 
+                f"sigma_loss={sigma_loss:.5f} | n_rendering_samples={n_rendering_samples:d} | "
+                f"max_depth={depth.max():.3f} | "
+            )
+        
         if (step % cfg.trainer.size_decay_every == cfg.trainer.size_decay_every-1) and cfg.model.fixed_std:
             radiance_field.mlp_base.encoding.update_factor()
 
@@ -323,68 +327,58 @@ def run(cfg: DictConfig):
                 "occupancy": estimator.state_dict(),
                 "optimizer": optimizer.state_dict(),
             }
-            torch.save(state_dict, f"{output_path}/model.pth")
-
+            
+            model_output_path = f"{output_path}/model.pth"
+            torch.save(state_dict, model_output_path)
+            log.info(f"Model saved to {model_output_path}")
+            
             for idx in range(radiance_field.n_levels):
                 means = radiance_field.mlp_base.encoding.get_means(idx)
                 if means is not None:
                     means = means.reshape(-1, means.shape[-1])
-
                     means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
-                    if step:
+                    if step > 0:
                         os.remove(os.path.join(output_path, f'means_lod{idx}@{step-cfg.trainer.save_every:05d}.ply'))
-                    means_cloud.export(os.path.join(output_path, f'means_lod{idx}@{step:05d}.ply')) # 
+                    
+                    means_lod_path = os.path.join(output_path, f'means_lod{idx}@{step:05d}.ply')
+                    means_cloud.export(means_lod_path)
+                    log.info(f"Means saved to {means_lod_path}")
+        
+        if step % cfg.trainer.visualize_every == 0 and step > 0:
+            log.info("Starting validation")
+            radiance_field.eval()
+            estimator.eval()
 
-        if step % cfg.trainer.visualize_every == 0:
-            if step:
-                # evaluation
-                radiance_field.eval()
-                estimator.eval()
-
-                with torch.no_grad():
-                    data = test_dataset[0]
-                    render_bkgd = data["color_bkgd"]
-                    rays = data["rays"]
-                    pixels = data["pixels"]
-
-                    rgb, acc, depth, kl_div, _, mip_loss = render_image_with_occgrid(
-                        radiance_field,
-                        estimator,
-                        rays,
-                        # rendering options
-                        near_plane=near_plane,
-                        render_step_size=render_step_size,
-                        render_bkgd=render_bkgd,
-                        cone_angle=cone_angle,
-                        alpha_thre=alpha_thre,
-                    )
-                    visualize = torch.concatenate([rgb, pixels], dim=1)
-                    writer.add_image("visual/rgb", visualize,  step, dataformats="HWC")
-            elapsed_time = time.time() - tic
-            loss = F.mse_loss(rgb, pixels)
-            psnr = -10.0 * torch.log(loss) / np.log(10.0)
-            log.info(
-                f"elapsed_time={elapsed_time:.2f}s | step={step} | "
-                f"psnr={psnr:.2f} | loss={rgb_loss:.5f} | "
-                f"surf_loss={surf_loss:.5f} | "
-                f"sigma_loss={sigma_loss:.5f} | "
-                f"n_rendering_samples={n_rendering_samples:d} | num_rays={len(pixels):d} | "
-                f"max_depth={depth.max():.3f} | "
-            )
+            with torch.no_grad():
+                data = test_dataset[0]
+                render_bkgd, rays, pixels = retrieve_image_data(data)
+                rgb, _, _, _, _, _ = render_image_with_occgrid(
+                    radiance_field,
+                    estimator,
+                    rays,
+                    # rendering options
+                    near_plane=near_plane,
+                    render_step_size=render_step_size,
+                    render_bkgd=render_bkgd,
+                    cone_angle=cone_angle,
+                    alpha_thre=alpha_thre,
+                )
+                visualize = torch.concatenate([rgb, pixels], dim=1)
+                writer.add_image("visual/rgb", visualize,  step, dataformats="HWC")
+                
+            psnr = calculate_psnr(rgb, pixels)
+            log.info(f"Validation: psnr={psnr:.2f}")
 
     # evaluation
+    log.info('Starting evaluation')
+    
     radiance_field.eval()
     estimator.eval()
-
     psnrs = []
     with torch.no_grad():
-        for i in tqdm.tqdm(range(len(test_dataset))):
-            data = test_dataset[i]
-            render_bkgd = data["color_bkgd"]
-            rays = data["rays"]
-            pixels = data["pixels"]
-
-            rgb, acc, depth, kl_div, _, mip_loss = render_image_with_occgrid(
+        for idx, data in enumerate(tqdm(test_dataset, total=len(test_dataset), desc="Evaluation")):
+            render_bkgd, rays, pixels = retrieve_image_data(data)
+            rgb, _, _, _, _, _ = render_image_with_occgrid(
                 radiance_field,
                 estimator,
                 rays,
@@ -395,19 +389,18 @@ def run(cfg: DictConfig):
                 cone_angle=cone_angle,
                 alpha_thre=alpha_thre,
             )
-            mse = F.mse_loss(rgb, pixels)
-            psnr = -10.0 * torch.log(mse) / np.log(10.0)
-            psnrs.append(psnr.item())
+            
+            psnrs.append(calculate_psnr(rgb, pixels))
             imageio.imwrite(
                 f"{output_path}/test/rgb_test_{i}.png",
                 (rgb.cpu().numpy() * 255).astype(np.uint8),
             )
 
     psnr_avg = sum(psnrs) / len(psnrs)
-    logging.info(f"evaluation: psnr_avg={psnr_avg}")
-    writer.add_scalar("test/psnr", psnr_avg, max_steps)
+    logging.info(f"Evaluation: psnr_avg={psnr_avg}")
     with open(f"{output_path}/metrics.txt", "w") as fp:
         fp.write(f"PSNR:{psnr_avg:.3f}")
+    writer.add_scalar("test/psnr", psnr_avg, max_steps)
     writer.close()
 
 if __name__ == "__main__":
