@@ -14,10 +14,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import trimesh
-import tqdm
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 home_dir = os.path.expanduser('~')
 project_root = os.path.join(home_dir, 'gnerf')
@@ -189,7 +189,7 @@ def run(cfg: DictConfig):
     writer, output_path = initialize_output()
 
     if cfg.dataset.scene in TANKS_TEMPLE_SCENES or cfg.dataset.scene in NERF_SYNTHETIC_SCENES:
-        train_params = get_training_params(cfg.dataset.scene)
+        train_params = get_training_params(cfg)
         max_steps, target_sample_batch_size, weight_decay = (
             train_params["max_steps"],
             train_params["target_sample_batch_size"], 
