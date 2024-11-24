@@ -88,6 +88,9 @@ class SplashEncoding(nn.Module):
         if not fixed_std:
             self.stds = torch.normal(r, 2e-2, size=(self.total_gaus, 1))
             self.stds = nn.Parameter(self.stds)
+        self.scaling = torch.ones(self.total_gaus, 3).cuda()
+        self.rotation = torch.ones(self.total_gaus, 4).cuda()
+
         print(f"Num grid features: {self.total_feats} and Num grid gaussians: {self.total_gaus}")
         # print(f"Num gaussians in each LoD:", self.num_gaus)
 
