@@ -376,8 +376,8 @@ def run(cfg: DictConfig):
     estimator.eval()
     psnrs = []
     with torch.no_grad():
-        for idx, data in enumerate(tqdm(test_dataset, total=len(test_dataset), desc="Evaluation")):
-            render_bkgd, rays, pixels = retrieve_image_data(data)
+         for i in tqdm(range(len(test_dataset)), desc='Evaluation'):
+            render_bkgd, rays, pixels = retrieve_image_data(test_dataset[i])
             rgb, _, _, _, _, _ = render_image_with_occgrid(
                 radiance_field,
                 estimator,
