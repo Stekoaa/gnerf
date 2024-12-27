@@ -89,7 +89,7 @@ class SplashEncoding(nn.Module):
         # xd
         # self.total_feats = sum(self.num_feats)
         # self.total_gaus = sum(self.num_gaus)
-        self.total_gaus = 786432 # fixed number of gauss for now
+        self.total_gaus = 100000 # fixed number of gauss for now
         # xd
         # self.feats = torch.randn(self.total_feats, self.n_features_per_level) * 1e-2
         # self.feats = nn.Parameter(self.feats)
@@ -180,10 +180,20 @@ class SplashEncoding(nn.Module):
     #     return feats, gmm
 
     def knn(self, coords):
+        batch_size = 1000
         neighbors_number = 10
-        distances = torch.cdist(coords, self.means)
-        _, nearest_indices = torch.topk(distances, neighbors_number, largest=False, sorted=False) 
-        nearest_means = self.means[nearest_indices]
+        n_coords = coords.shape[0]
+        nearest_means_list = []
+        
+        for i in range(0, n_coords, batch_size):
+            batch_coords = coords[i:i+batch_size]
+            
+            distances = torch.cdist(batch_coords, self.means)
+            _, nearest_indices = torch.topk(distances, neighbors_number, largest=False, sorted=False)
+            nearest_means_batch = self.means[nearest_indices]
+            nearest_means_list.append(nearest_means_batch)
+        
+        nearest_means = torch.cat(nearest_means_list, dim=0)
         return nearest_means
 
     def forward(self, coords, lod_idx=None):
@@ -191,6 +201,7 @@ class SplashEncoding(nn.Module):
         # feats, gmm = self.interpolate_cuda(coords)
         # is_gaussian = self.num_splashes > 0
         # gmm = gmm[:, is_gaussian]
+
         nearest_means = self.knn(coords)
         log.info(f'Nearest means: {nearest_means}')
         return feats, gmm

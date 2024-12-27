@@ -283,6 +283,7 @@ def run(cfg: DictConfig):
         mip_loss = mip_loss.mean() # distortion loss
         sigma_loss, surf_loss, i = 0, 0, 0
         
+        # TODO: tu coś trzeba pomajstrować
         for idx in range(radiance_field.n_levels):
             resolution = radiance_field.mlp_base.encoding.resolutions[idx]
             stds = radiance_field.mlp_base.encoding.get_stds(idx)

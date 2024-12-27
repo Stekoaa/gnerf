@@ -50,6 +50,9 @@ class NetworkwithSplashEncoding(nn.Module):
         #                                splits=splits, std_init_factor=std_init_factor, fixed_std=fixed_std, 
         #                                decay_factor=decay_factor)
         
+        self.encoding = SplashEncoding(num_splashes=num_splashes,splits=splits, std_init_factor=std_init_factor, 
+                                       fixed_std=fixed_std, decay_factor=decay_factor)
+
         input_dim = n_features_per_level * n_levels
         self.mlp = tcnn.Network(
                 n_input_dims=input_dim,
