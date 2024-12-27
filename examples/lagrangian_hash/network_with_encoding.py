@@ -42,12 +42,13 @@ class NetworkwithSplashEncoding(nn.Module):
         output_activation: str = "None",
     ):
         super().__init__()
-
-        self.encoding = SplashEncoding(base_resolution=base_resolution, per_level_scale=per_level_scale,
-                                       n_levels=n_levels, n_features_per_level=n_features_per_level, 
-                                       num_splashes=num_splashes, log2_hashmap_size=log2_hashmap_size,
-                                       splits=splits, std_init_factor=std_init_factor, fixed_std=fixed_std, 
-                                       decay_factor=decay_factor)
+        
+        # xd
+        # self.encoding = SplashEncoding(base_resolution=base_resolution, per_level_scale=per_level_scale,
+        #                                n_levels=n_levels, n_features_per_level=n_features_per_level, 
+        #                                num_splashes=num_splashes, log2_hashmap_size=log2_hashmap_size,
+        #                                splits=splits, std_init_factor=std_init_factor, fixed_std=fixed_std, 
+        #                                decay_factor=decay_factor)
         
         input_dim = n_features_per_level * n_levels
         self.mlp = tcnn.Network(

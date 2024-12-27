@@ -332,17 +332,18 @@ def run(cfg: DictConfig):
             torch.save(state_dict, model_output_path)
             log.info(f"Model saved to {model_output_path}")
             
-            for idx in range(radiance_field.n_levels):
-                means = radiance_field.mlp_base.encoding.get_means(idx)
-                if means is not None:
-                    means = means.reshape(-1, means.shape[-1])
-                    means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
-                    if step > 0:
-                        os.remove(os.path.join(output_path, f'means_lod{idx}@{step-cfg.trainer.save_every:05d}.ply'))
+            # xd
+            # for idx in range(radiance_field.n_levels):
+            #     means = radiance_field.mlp_base.encoding.get_means(idx)
+            #     if means is not None:
+            #         means = means.reshape(-1, means.shape[-1])
+            #         means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
+            #         if step > 0:
+            #             os.remove(os.path.join(output_path, f'means_lod{idx}@{step-cfg.trainer.save_every:05d}.ply'))
                     
-                    means_lod_path = os.path.join(output_path, f'means_lod{idx}@{step:05d}.ply')
-                    means_cloud.export(means_lod_path)
-                    log.info(f"Means saved to {means_lod_path}")
+            #         means_lod_path = os.path.join(output_path, f'means_lod{idx}@{step:05d}.ply')
+            #         means_cloud.export(means_lod_path)
+            #         log.info(f"Means saved to {means_lod_path}")
         
         if step % cfg.trainer.visualize_every == 0 and step > 0:
             log.info("Starting validation")

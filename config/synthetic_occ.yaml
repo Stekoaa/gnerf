@@ -27,7 +27,7 @@ model:
     n_levels: 16
     max_resolution: 1024
     num_splashes: 4
-    fixed_std: True
+    fixed_std: False
     std_init_factor: 50
     std_final_factor: 5
     load_model_path: ""
