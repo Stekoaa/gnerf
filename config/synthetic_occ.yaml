@@ -48,7 +48,7 @@ scheduler:
     gamma: 0.33
 
 trainer:
-    max_steps: 20000
+    max_steps: 1000
     log_every: 2000
     save_every: 20000
     visualize_every: 5000

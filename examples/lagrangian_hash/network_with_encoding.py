@@ -1,3 +1,5 @@
+import logging
+
 from typing import Callable, Optional, List
 from arrgh import arrgh
 
@@ -18,6 +20,7 @@ except ImportError as e:
     )
     exit()
 
+log = logging.getLogger(__name__)
 
 class NetworkwithSplashEncoding(nn.Module):
     def __init__(
@@ -66,4 +69,5 @@ class NetworkwithSplashEncoding(nn.Module):
     def forward(self, coords):
         encoding, gmm = self.encoding(coords)
         output = self.mlp(encoding)
+        log.info(f'SplashEncoding output: {output}')
         return output, gmm

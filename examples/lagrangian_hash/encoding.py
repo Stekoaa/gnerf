@@ -1,5 +1,6 @@
 from typing import List
 import math
+import logging
 import numpy as np
 
 import torch
@@ -10,15 +11,20 @@ from examples.utils.general_utils import append_sys_path
 
 append_sys_path()
 
+log = logging.getLogger(__name__)
+
 class SplashEncoding(nn.Module):
     def __init__(
         self,
-        base_resolution: int = 16,
+        # xd
+        # base_resolution: int = 16,
         per_level_scale: int = 1.47,
-        n_levels: int = 16,
-        n_features_per_level: int = 2,
-        num_splashes: int = 4, 
-        log2_hashmap_size: int = 17,
+        # xd
+        # n_levels: int = 16,
+        # n_features_per_level: int = 2,
+        num_splashes: int = 4,
+        # xd 
+        # log2_hashmap_size: int = 17,
         splits: List[float] = [0.875, 0.9375],
         std_init_factor: float = 1.0,
         fixed_std: bool = False,
@@ -27,59 +33,67 @@ class SplashEncoding(nn.Module):
         """
         """
         super().__init__()
-
-        self.num_lods = n_levels
-        self.n_features_per_level = n_features_per_level
-        self.log2_hashmap_size = log2_hashmap_size
-        self.hashmap_size = int(2 ** log2_hashmap_size)
+        
+        # xd
+        # self.num_lods = n_levels
+        # self.log2_hashmap_size = log2_hashmap_size
+        # self.hashmap_size = int(2 ** log2_hashmap_size)
+        # self.n_features_per_level = n_features_per_level
         splits.sort(reverse=True)
         self.splits = splits
         self.num_splashes = num_splashes
         self.decay_factor = decay_factor
         
-        self.register_buffer("feat_begin_idxes", torch.zeros(self.num_lods+1, dtype=torch.int64))
-        self.register_buffer("gau_begin_idxes", torch.zeros(self.num_lods+1, dtype=torch.int64))
-        self.register_buffer("num_idxes", torch.zeros(self.num_lods, dtype=torch.int64))
-        self.register_buffer("num_feats", torch.zeros(self.num_lods, dtype=torch.int64))
-        self.register_buffer("num_gaus", torch.zeros(self.num_lods, dtype=torch.int64))
+        # xd
+        # self.register_buffer("feat_begin_idxes", torch.zeros(self.num_lods+1, dtype=torch.int64))
+        # self.register_buffer("gau_begin_idxes", torch.zeros(self.num_lods+1, dtype=torch.int64))
+        # self.register_buffer("num_idxes", torch.zeros(self.num_lods, dtype=torch.int64))
+        # self.register_buffer("num_feats", torch.zeros(self.num_lods, dtype=torch.int64))
+        # self.register_buffer("num_gaus", torch.zeros(self.num_lods, dtype=torch.int64))
+        
+        # xd
+        # self.resolutions = torch.zeros([self.num_lods], dtype=torch.int64)
+        # self.num_splashes = torch.zeros([self.num_lods], dtype=torch.int64)
+        # for i in range(self.num_lods):
+        #     self.resolutions[i] = int(base_resolution * per_level_scale**i)
+        #     for j in range(len(self.splits)):
+        #         if i >= self.num_lods * self.splits[j]:
+        #             self.num_splashes[i] = num_splashes // (2**j)
+        #             assert(self.num_splashes[i] > 0, f"Num splashes is zero for LoD-{i}")
+        #             break
+        # print("# gaus in each LoD:", self.num_splashes)
 
-        self.resolutions = torch.zeros([self.num_lods], dtype=torch.int64)
-        self.num_splashes = torch.zeros([self.num_lods], dtype=torch.int64)
-        for i in range(self.num_lods):
-            self.resolutions[i] = int(base_resolution * per_level_scale**i)
-            for j in range(len(self.splits)):
-                if i >= self.num_lods * self.splits[j]:
-                    self.num_splashes[i] = num_splashes // (2**j)
-                    assert(self.num_splashes[i] > 0, f"Num splashes is zero for LoD-{i}")
-                    break
-        print("# gaus in each LoD:", self.num_splashes)
+        # xd
+        # num_feats_so_far = 0
+        # num_gaus_so_far = 0
+        # for i in range(self.num_lods):
+        #     max_index_level = self.hashmap_size
+        #     num_index_level = int(self.resolutions[i] ** 3)
+        #     num_index_level = min(num_index_level, max_index_level)
 
-        num_feats_so_far = 0
-        num_gaus_so_far = 0
-        for i in range(self.num_lods):
-            max_index_level = self.hashmap_size
-            num_index_level = int(self.resolutions[i] ** 3)
-            num_index_level = min(num_index_level, max_index_level)
+        #     num_gaus_level = int(num_index_level * self.num_splashes[i])
+        #     num_feats_level = int(num_index_level * max(self.num_splashes[i], 1))
 
-            num_gaus_level = int(num_index_level * self.num_splashes[i])
-            num_feats_level = int(num_index_level * max(self.num_splashes[i], 1))
+        #     self.feat_begin_idxes[i] = num_feats_so_far
+        #     self.gau_begin_idxes[i] = num_gaus_so_far
+        #     self.num_gaus[i] = num_gaus_level
+        #     self.num_feats[i] = num_feats_level
+        #     self.num_idxes[i] = num_index_level
+        #     num_gaus_so_far += num_gaus_level
+        #     num_feats_so_far += num_feats_level
 
-            self.feat_begin_idxes[i] = num_feats_so_far
-            self.gau_begin_idxes[i] = num_gaus_so_far
-            self.num_gaus[i] = num_gaus_level
-            self.num_feats[i] = num_feats_level
-            self.num_idxes[i] = num_index_level
-            num_gaus_so_far += num_gaus_level
-            num_feats_so_far += num_feats_level
-
-        self.feat_begin_idxes[self.num_lods] = num_feats_so_far
-        self.gau_begin_idxes[self.num_lods] = num_gaus_so_far
+        # xd
+        # self.feat_begin_idxes[self.num_lods] = num_feats_so_far
+        # self.gau_begin_idxes[self.num_lods] = num_gaus_so_far
 
         r = 0.125
-        self.total_feats = sum(self.num_feats)
-        self.total_gaus = sum(self.num_gaus)
-        self.feats = torch.randn(self.total_feats, self.n_features_per_level) * 1e-2
-        self.feats = nn.Parameter(self.feats)
+        # xd
+        # self.total_feats = sum(self.num_feats)
+        # self.total_gaus = sum(self.num_gaus)
+        self.total_gaus = 786432 # fixed number of gauss for now
+        # xd
+        # self.feats = torch.randn(self.total_feats, self.n_features_per_level) * 1e-2
+        # self.feats = nn.Parameter(self.feats)
         self.means = torch.rand(self.total_gaus, 3)
         self.init_mean()
         self.means = nn.Parameter(self.means)
@@ -88,12 +102,12 @@ class SplashEncoding(nn.Module):
         if not fixed_std:
             self.stds = torch.normal(r, 2e-2, size=(self.total_gaus, 1))
             self.stds = nn.Parameter(self.stds)
-        print(f"Num grid features: {self.total_feats} and Num grid gaussians: {self.total_gaus}")
-        # print(f"Num gaussians in each LoD:", self.num_gaus)
+        # print(f"Num grid features: {self.total_feats} and Num grid gaussians: {self.total_gaus}")
 
 
     def init_mean(self):
         N = self.total_gaus
+        log.info(f'Total number of gauss: {self.total_gaus}')
         pts = np.random.randn(N, 3)
         r = np.sqrt(np.random.rand(N, 1))
         pts = pts / np.linalg.norm(pts, axis=1)[:, None] * r
@@ -103,10 +117,14 @@ class SplashEncoding(nn.Module):
 
 
     def init_std(self, std_init_factor):
-        for lod in range(self.num_lods):
-            if self.num_splashes[lod]:
-                gau_size = std_init_factor * 2 / self.resolutions[lod]
-                self.stds[self.gau_begin_idxes[lod]:self.gau_begin_idxes[lod+1]] *= gau_size
+        # xd
+        # for lod in range(self.num_lods):
+        #     if self.num_splashes[lod]:
+        #         gau_size = std_init_factor * 2 / self.resolutions[lod]
+        #         self.stds[self.gau_begin_idxes[lod]:self.gau_begin_idxes[lod+1]] *= gau_size
+        
+
+
 
 
     def update_factor(self):
@@ -179,19 +197,6 @@ class SplashEncoding(nn.Module):
     
         return feats, gmm
     
-
-
-
-
-
-
-
-
-
-
-
-    
-
     def hash_index(self, coords, resolution, codebook_size):
         prime = [1, 2654435761, 805459861]
         if pow(resolution, 3) <= codebook_size:

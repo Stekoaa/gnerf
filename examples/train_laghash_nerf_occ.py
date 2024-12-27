@@ -129,9 +129,10 @@ def initialize_radiance_field(cfg, estimator, device):
     
     radiance_field = LagHashRadianceField(
         aabb=estimator.aabbs[-1], 
-        log2_hashmap_size=cfg.model.log2_hashmap_size, 
         num_splashes=cfg.model.num_splashes,
-        max_resolution=cfg.model.max_resolution, 
+        # xd
+        # log2_hashmap_size=cfg.model.log2_hashmap_size, 
+        # max_resolution=cfg.model.max_resolution, 
         std_init_factor=cfg.model.std_init_factor,
         fixed_std=cfg.model.fixed_std,
         decay_factor=std_decay_factor, 
@@ -225,7 +226,6 @@ def run(cfg: DictConfig):
 
     estimator = initialize_estimator(aabb, grid_resolution, grid_nlvl, device)
 
-    # setup the radiance field we want to train.
     grad_scaler = torch.cuda.amp.GradScaler(2**10)
     radiance_field = initialize_radiance_field(cfg, estimator, device)
 
@@ -280,7 +280,7 @@ def run(cfg: DictConfig):
 
         # compute loss
         loss_warm_up = calculate_loss_warmup(step, max_steps)
-        mip_loss = mip_loss.mean()
+        mip_loss = mip_loss.mean() # distortion loss
         sigma_loss, surf_loss, i = 0, 0, 0
         
         for idx in range(radiance_field.n_levels):
