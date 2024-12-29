@@ -21,10 +21,9 @@ class SplashEncoding(nn.Module):
         # per_level_scale: int = 1.47,
         # n_levels: int = 16,
         # n_features_per_level: int = 2,
-        num_splashes: int = 4,
-        # xd 
+        # num_splashes: int = 4, 
         # log2_hashmap_size: int = 17,
-        splits: List[float] = [0.875, 0.9375],
+        # splits: List[float] = [0.875, 0.9375],
         std_init_factor: float = 1.0,
         fixed_std: bool = False,
         decay_factor: int = 1,
@@ -38,9 +37,9 @@ class SplashEncoding(nn.Module):
         # self.log2_hashmap_size = log2_hashmap_size
         # self.hashmap_size = int(2 ** log2_hashmap_size)
         # self.n_features_per_level = n_features_per_level
-        splits.sort(reverse=True)
-        self.splits = splits
-        self.num_splashes = num_splashes
+        # splits.sort(reverse=True)
+        # self.splits = splits
+        # self.num_splashes = num_splashes
         self.decay_factor = decay_factor
         
         # xd
@@ -179,22 +178,24 @@ class SplashEncoding(nn.Module):
     #     feats = feats.reshape(*output_shape, feats.shape[-1])
     #     return feats, gmm
 
-    def knn(self, coords):
+    def knn(self, coords, neighbors_number=10):
         batch_size = 1000
-        neighbors_number = 10
         n_coords = coords.shape[0]
-        nearest_means_list = []
+        
+        nearest_means = torch.empty((n_coords, neighbors_number, 3), device=coords.device)
+        nearest_stds = torch.empty((n_coords, neighbors_number, 1), device=coords.device)
         
         for i in range(0, n_coords, batch_size):
             batch_coords = coords[i:i+batch_size]
-            
             distances = torch.cdist(batch_coords, self.means)
             _, nearest_indices = torch.topk(distances, neighbors_number, largest=False, sorted=False)
             nearest_means_batch = self.means[nearest_indices]
-            nearest_means_list.append(nearest_means_batch)
+            nearest_stds_batch = self.stds[nearest_indices]
+            
+            nearest_means[i:i+batch_size] = nearest_means_batch
+            nearest_stds[i:i+batch_size] = nearest_stds_batch
         
-        nearest_means = torch.cat(nearest_means_list, dim=0)
-        return nearest_means
+        return nearest_means, nearest_stds
 
     def forward(self, coords, lod_idx=None):
         # xd
@@ -202,8 +203,9 @@ class SplashEncoding(nn.Module):
         # is_gaussian = self.num_splashes > 0
         # gmm = gmm[:, is_gaussian]
 
-        nearest_means = self.knn(coords)
+        nearest_means, nearest_stds = self.knn(coords)
         log.info(f'Nearest means: {nearest_means}')
+        log.info(f'Nearest stds: {nearest_stds}')
         return feats, gmm
     
     # xd

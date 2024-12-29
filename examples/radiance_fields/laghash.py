@@ -142,11 +142,10 @@ class LagHashRadianceField(torch.nn.Module):
         self.mlp_base = lagrangian_hash.NetworkwithSplashEncoding(
             # xd
             # n_levels = n_levels,
-            num_splashes=num_splashes,
-            # xd
+            # num_splashes=num_splashes,
             # n_features_per_level = 2,
             # log2_hashmap_size = log2_hashmap_size,
-            splits=splits,
+            # splits=splits,
             std_init_factor = std_init_factor,
             fixed_std = fixed_std,
             decay_factor=decay_factor,
