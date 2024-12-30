@@ -132,7 +132,9 @@ def initialize_radiance_field(cfg, estimator, device):
         num_splashes=cfg.model.num_splashes,
         # xd
         # log2_hashmap_size=cfg.model.log2_hashmap_size, 
-        # max_resolution=cfg.model.max_resolution, 
+        # max_resolution=cfg.model.max_resolution,
+        n_features_per_gauss=cfg.model.n_features_per_gauss,
+        n_neighbours=cfg.model.n_neighbours, 
         std_init_factor=cfg.model.std_init_factor,
         fixed_std=cfg.model.fixed_std,
         decay_factor=std_decay_factor, 
@@ -284,12 +286,12 @@ def run(cfg: DictConfig):
         sigma_loss, surf_loss, i = 0, 0, 0
         
         # TODO: tu coś trzeba pomajstrować
-        for idx in range(radiance_field.n_levels):
-            resolution = radiance_field.mlp_base.encoding.resolutions[idx]
-            stds = radiance_field.mlp_base.encoding.get_stds(idx)
-            if stds is not None:
-                sigma_loss += calculate_lod_sigma_loss(resolution, stds)
-                i += 1
+        # for idx in range(radiance_field.n_levels):
+        #     resolution = radiance_field.mlp_base.encoding.resolutions[idx]
+        #     stds = radiance_field.mlp_base.encoding.get_stds(idx)
+        #     if stds is not None:
+        #         sigma_loss += calculate_lod_sigma_loss(resolution, stds)
+        #         i += 1
         if i > 0:
             sigma_loss /= i
             surf_loss = kl_div.mean()

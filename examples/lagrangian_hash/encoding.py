@@ -27,6 +27,8 @@ class SplashEncoding(nn.Module):
         std_init_factor: float = 1.0,
         fixed_std: bool = False,
         decay_factor: int = 1,
+        n_neighbours: int = 5,
+        n_features_per_gauss: int = 3,
     ):
         """
         """
@@ -41,6 +43,7 @@ class SplashEncoding(nn.Module):
         # self.splits = splits
         # self.num_splashes = num_splashes
         self.decay_factor = decay_factor
+        self.n_features_per_gauss = n_features_per_gauss
         
         # xd
         # self.register_buffer("feat_begin_idxes", torch.zeros(self.num_lods+1, dtype=torch.int64))
@@ -88,11 +91,12 @@ class SplashEncoding(nn.Module):
         # xd
         # self.total_feats = sum(self.num_feats)
         # self.total_gaus = sum(self.num_gaus)
-        self.total_gaus = 100000 # fixed number of gauss for now
-        # xd
+        self.total_gaus = 10000 # fixed number of gauss for now
+        # xd 
         # self.feats = torch.randn(self.total_feats, self.n_features_per_level) * 1e-2
         # self.feats = nn.Parameter(self.feats)
-        self.means = torch.rand(self.total_gaus, 3)
+        self.feats = (torch.randn(self.total_gaus, self.n_features_per_gauss) * 1e-2).to(device='cuda')
+        self.feats = nn.Parameter(self.feats)
         self.init_mean()
         self.means = nn.Parameter(self.means)
         # xd
@@ -101,8 +105,9 @@ class SplashEncoding(nn.Module):
         # if not fixed_std:
         #    self.stds = torch.normal(r, 2e-2, size=(self.total_gaus, 1))
         #    self.stds = nn.Parameter(self.stds)
-        self.stds = torch.normal(r, 2e-2, size=(self.total_gaus, 1))
+        self.stds = torch.normal(r, 2e-2, size=(self.total_gaus, 1), device='cuda')
         self.stds = nn.Parameter(self.stds)
+        self.n_neighbours = n_neighbours
     
     def init_mean(self):
         N = self.total_gaus
@@ -112,7 +117,7 @@ class SplashEncoding(nn.Module):
         pts = pts / np.linalg.norm(pts, axis=1)[:, None] * r
         pts = pts * 0.25 + 0.5 # [0.25 ... 0.75]
         
-        self.means = torch.tensor(pts, dtype=torch.float32)
+        self.means = torch.tensor(pts, dtype=torch.float32, device='cuda')
 
     # xd
     # def init_std(self, std_init_factor):
@@ -178,24 +183,41 @@ class SplashEncoding(nn.Module):
     #     feats = feats.reshape(*output_shape, feats.shape[-1])
     #     return feats, gmm
 
-    def knn(self, coords, neighbors_number=10):
-        batch_size = 1000
+    def _get_nearest_gausses_indicies(self, coords):
+        batch_size = 10000
         n_coords = coords.shape[0]
         
-        nearest_means = torch.empty((n_coords, neighbors_number, 3), device=coords.device)
-        nearest_stds = torch.empty((n_coords, neighbors_number, 1), device=coords.device)
+        #nearest_means = torch.empty((n_coords, self.n_neighbours, 3), device=coords.device)
+        nearest_indices = torch.empty((n_coords, self.n_neighbours), device=coords.device, dtype=int)
         
         for i in range(0, n_coords, batch_size):
             batch_coords = coords[i:i+batch_size]
-            distances = torch.cdist(batch_coords, self.means)
-            _, nearest_indices = torch.topk(distances, neighbors_number, largest=False, sorted=False)
-            nearest_means_batch = self.means[nearest_indices]
-            nearest_stds_batch = self.stds[nearest_indices]
-            
-            nearest_means[i:i+batch_size] = nearest_means_batch
-            nearest_stds[i:i+batch_size] = nearest_stds_batch
+            distances = torch.cdist(batch_coords, self.means).to(device='cuda')
+            _, batch_nearest_indices = torch.topk(distances, self.n_neighbours, largest=False, sorted=False)
+            # nearest_means_batch = self.means[nearest_indices]
+            # nearest_stds_batch = self.stds[nearest_indices] 
+            # nearest_means[i:i+batch_size] = nearest_means_batch
+            # nearest_stds[i:i+batch_size] = nearest_stds_batch
+            nearest_indices[i:i+batch_size] = batch_nearest_indices
         
-        return nearest_means, nearest_stds
+        return nearest_indices
+
+    def _calculate(self, coords, nearest_gausses_indicies):
+        # means = self.means[nearest_gausses_indicies]
+        # stds = self.stds[nearest_gausses_indicies]
+        nearest_features = self.feats[nearest_gausses_indicies]  # [num_coords, num_nearest, feature_dim]
+
+        # Step 2: Compute Gaussian weights for the nearest Gaussians
+        diff = coords[:, None, :] - self.means[nearest_gausses_indicies, :]  # [num_coords, num_nearest, 3] - Difference between coords and means
+        sq_dist = torch.sum(diff ** 2, dim=-1, keepdim=True)  # [num_coords, num_nearest, 1] - Squared distances
+        gau_weights = torch.exp(-sq_dist / (2 * self.stds[nearest_gausses_indicies] ** 2)) / (torch.sqrt(torch.tensor(2 * torch.pi)) * self.stds[nearest_gausses_indicies])  # [num_coords, num_nearest, 1]
+
+        # Step 3: Weight features by Gaussian weights
+        weighted_features = nearest_features * gau_weights  # [num_coords, num_nearest, feature_dim]
+
+        # Step 4: Sum weighted features across Gaussians
+        feature_vector = torch.sum(weighted_features, dim=1)  # [num_coords, feature_dim]
+        return feature_vector
 
     def forward(self, coords, lod_idx=None):
         # xd
@@ -203,9 +225,9 @@ class SplashEncoding(nn.Module):
         # is_gaussian = self.num_splashes > 0
         # gmm = gmm[:, is_gaussian]
 
-        nearest_means, nearest_stds = self.knn(coords)
-        log.info(f'Nearest means: {nearest_means}')
-        log.info(f'Nearest stds: {nearest_stds}')
+        nearest_gausses_indicies = self._get_nearest_gausses_indicies(coords)
+        feats = self._calculate(coords, nearest_gausses_indicies)
+        gmm=None
         return feats, gmm
     
     # xd

@@ -86,6 +86,8 @@ class LagHashRadianceField(torch.nn.Module):
         # max_resolution: int = 1024,
         # n_levels: int = 16,
         # log2_hashmap_size: int = 17,
+        n_features_per_gauss: int = 3,
+        n_neighbours: int = 5,
         num_splashes: int = 4,
         splits: List[float] = [0.875, 0.9375],
         std_init_factor: float = 1.0,
@@ -149,6 +151,8 @@ class LagHashRadianceField(torch.nn.Module):
             std_init_factor = std_init_factor,
             fixed_std = fixed_std,
             decay_factor=decay_factor,
+            n_features_per_gauss=n_features_per_gauss,
+            n_neighbours=n_neighbours,
             # xd
             # base_resolution = base_resolution,
             # per_level_scale = per_level_scale,
@@ -248,7 +252,6 @@ class LagHashRadianceField(torch.nn.Module):
         positions: torch.Tensor,
         directions: torch.Tensor = None,
     ):
-        log.info(f'Radiance field positions: {positions}')
         if self.use_viewdirs and (directions is not None):
             assert (
                 positions.shape == directions.shape

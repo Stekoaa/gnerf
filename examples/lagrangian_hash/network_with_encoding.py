@@ -25,12 +25,15 @@ log = logging.getLogger(__name__)
 class NetworkwithSplashEncoding(nn.Module):
     def __init__(
         self,
-        base_resolution: int = 16,
-        per_level_scale: int = 1.47,
-        n_levels: int = 16,
-        n_features_per_level: int = 2,
-        num_splashes: int = 4, 
-        log2_hashmap_size: int = 17,
+        # xd
+        # base_resolution: int = 16,
+        # per_level_scale: int = 1.47,
+        # n_levels: int = 16,
+        # n_features_per_level: int = 2,
+        # log2_hashmap_size: int = 17,
+        num_splashes: int = 4,
+        n_features_per_gauss: int = 3,
+        n_neighbours: int = 5,  
         splits: List[float] = [0.875, 0.9375],
         std_init_factor: float = 1.0,
         fixed_std: bool = False,
@@ -50,10 +53,11 @@ class NetworkwithSplashEncoding(nn.Module):
         #                                splits=splits, std_init_factor=std_init_factor, fixed_std=fixed_std, 
         #                                decay_factor=decay_factor)
         
-        self.encoding = SplashEncoding(num_splashes=num_splashes,splits=splits, std_init_factor=std_init_factor, 
-                                       fixed_std=fixed_std, decay_factor=decay_factor)
-
-        input_dim = n_features_per_level * n_levels
+        self.encoding = SplashEncoding(std_init_factor=std_init_factor, fixed_std=fixed_std, 
+                                       decay_factor=decay_factor, n_neighbours=n_neighbours,
+                                       n_features_per_gauss=n_features_per_gauss)
+        
+        input_dim = n_features_per_gauss
         self.mlp = tcnn.Network(
                 n_input_dims=input_dim,
                 n_output_dims=output_dim,
@@ -73,5 +77,4 @@ class NetworkwithSplashEncoding(nn.Module):
     def forward(self, coords):
         encoding, gmm = self.encoding(coords)
         output = self.mlp(encoding)
-        log.info(f'SplashEncoding output: {output}')
         return output, gmm
