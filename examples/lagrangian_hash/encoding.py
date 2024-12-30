@@ -91,7 +91,7 @@ class SplashEncoding(nn.Module):
         # xd
         # self.total_feats = sum(self.num_feats)
         # self.total_gaus = sum(self.num_gaus)
-        self.total_gaus = 10000 # fixed number of gauss for now
+        self.total_gaus = 50000 # fixed number of gauss for now
         # xd 
         # self.feats = torch.randn(self.total_feats, self.n_features_per_level) * 1e-2
         # self.feats = nn.Parameter(self.feats)
@@ -194,23 +194,17 @@ class SplashEncoding(nn.Module):
             batch_coords = coords[i:i+batch_size]
             distances = torch.cdist(batch_coords, self.means).to(device='cuda')
             _, batch_nearest_indices = torch.topk(distances, self.n_neighbours, largest=False, sorted=False)
-            # nearest_means_batch = self.means[nearest_indices]
-            # nearest_stds_batch = self.stds[nearest_indices] 
-            # nearest_means[i:i+batch_size] = nearest_means_batch
-            # nearest_stds[i:i+batch_size] = nearest_stds_batch
             nearest_indices[i:i+batch_size] = batch_nearest_indices
         
         return nearest_indices
 
     def _calculate(self, coords, nearest_gausses_indicies):
-        # means = self.means[nearest_gausses_indicies]
-        # stds = self.stds[nearest_gausses_indicies]
         nearest_features = self.feats[nearest_gausses_indicies]  # [num_coords, num_nearest, feature_dim]
 
         # Step 2: Compute Gaussian weights for the nearest Gaussians
         diff = coords[:, None, :] - self.means[nearest_gausses_indicies, :]  # [num_coords, num_nearest, 3] - Difference between coords and means
         sq_dist = torch.sum(diff ** 2, dim=-1, keepdim=True)  # [num_coords, num_nearest, 1] - Squared distances
-        gau_weights = torch.exp(-sq_dist / (2 * self.stds[nearest_gausses_indicies] ** 2)) / (torch.sqrt(torch.tensor(2 * torch.pi)) * self.stds[nearest_gausses_indicies])  # [num_coords, num_nearest, 1]
+        gau_weights = torch.exp(-sq_dist / (2 * self.stds[nearest_gausses_indicies] ** 2)) / ((torch.sqrt(torch.tensor(2 * torch.pi)) * self.stds[nearest_gausses_indicies]) + 1e-7) # [num_coords, num_nearest, 1]
 
         # Step 3: Weight features by Gaussian weights
         weighted_features = nearest_features * gau_weights  # [num_coords, num_nearest, feature_dim]

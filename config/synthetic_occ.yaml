@@ -25,8 +25,8 @@ render:
 model:
     log2_hashmap_size: 17
     n_levels: 16
-    n_neighbours: 5
-    n_features_per_gauss: 3
+    n_neighbours: 50
+    n_features_per_gauss: 5
     max_resolution: 1024
     num_splashes: 4
     fixed_std: False
