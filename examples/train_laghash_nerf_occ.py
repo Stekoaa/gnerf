@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 import trimesh
 from hydra.utils import to_absolute_path
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -138,7 +138,8 @@ def initialize_radiance_field(cfg, estimator, device):
         std_init_factor=cfg.model.std_init_factor,
         fixed_std=cfg.model.fixed_std,
         decay_factor=std_decay_factor, 
-        splits=cfg.model.splits
+        splits=cfg.model.splits,
+        n_gausses=cfg.model.n_gausses
     ).to(device)
 
     if cfg.model.load_model_path != "":
@@ -184,12 +185,22 @@ def retrieve_image_data(img):
     pixels = img["pixels"]
     return render_bkgd, rays, pixels
 
+def write_config_to_file(cfg: DictConfig, path: str):
+    cfg_str = OmegaConf.to_yaml(cfg)
+    output_file = f'{path}/config.txt'
+
+    with open(output_file, 'w') as file:
+        file.write(cfg_str)
+
+    print(f"Configuration written to {output_file}")
+
 @hydra.main(**_HYDRA_PARAMS)
 def run(cfg: DictConfig):
     device = cfg.device
     set_random_seed(42)
     
     writer, output_path = initialize_output()
+    write_config_to_file(cfg, output_path)
 
     if cfg.dataset.scene in TANKS_TEMPLE_SCENES or cfg.dataset.scene in NERF_SYNTHETIC_SCENES:
         train_params = get_training_params(cfg)
@@ -347,31 +358,41 @@ def run(cfg: DictConfig):
             #         means_lod_path = os.path.join(output_path, f'means_lod{idx}@{step:05d}.ply')
             #         means_cloud.export(means_lod_path)
             #         log.info(f"Means saved to {means_lod_path}")
-        
-        if step % cfg.trainer.visualize_every == 0 and step > 0:
-            log.info("Starting validation")
-            radiance_field.eval()
-            estimator.eval()
 
-            with torch.no_grad():
-                data = test_dataset[0]
-                render_bkgd, rays, pixels = retrieve_image_data(data)
-                rgb, _, _, _, _, _ = render_image_with_occgrid(
-                    radiance_field,
-                    estimator,
-                    rays,
-                    # rendering options
-                    near_plane=near_plane,
-                    render_step_size=render_step_size,
-                    render_bkgd=render_bkgd,
-                    cone_angle=cone_angle,
-                    alpha_thre=alpha_thre,
-                )
-                visualize = torch.concatenate([rgb, pixels], dim=1)
-                writer.add_image("visual/rgb", visualize,  step, dataformats="HWC")
+            means = radiance_field.mlp_base.encoding.get_means()
+            means = means.reshape(-1, means.shape[-1])
+            means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
+            if step > 0:
+                os.remove(os.path.join(output_path, f'means@{step-cfg.trainer.save_every:05d}.ply'))
+            
+            means_lod_path = os.path.join(output_path, f'means@{step:05d}.ply')
+            means_cloud.export(means_lod_path)
+            log.info(f"Means saved to {means_lod_path}")
+        
+        # if step % cfg.trainer.visualize_every == 0 and step > 0:
+        #     log.info("Starting validation")
+        #     radiance_field.eval()
+        #     estimator.eval()
+
+        #     with torch.no_grad():
+        #         data = test_dataset[0]
+        #         render_bkgd, rays, pixels = retrieve_image_data(data)
+        #         rgb, _, _, _, _, _ = render_image_with_occgrid(
+        #             radiance_field,
+        #             estimator,
+        #             rays,
+        #             # rendering options
+        #             near_plane=near_plane,
+        #             render_step_size=render_step_size,
+        #             render_bkgd=render_bkgd,
+        #             cone_angle=cone_angle,
+        #             alpha_thre=alpha_thre,
+        #         )
+        #         visualize = torch.concatenate([rgb, pixels], dim=1)
+        #         writer.add_image("visual/rgb", visualize,  step, dataformats="HWC")
                 
-            psnr = calculate_psnr(rgb, pixels)
-            log.info(f"Validation: psnr={psnr:.2f}")
+        #     psnr = calculate_psnr(rgb, pixels)
+        #     log.info(f"Validation: psnr={psnr:.2f}")
 
     # evaluation
     log.info('Starting evaluation')

@@ -33,7 +33,8 @@ class NetworkwithSplashEncoding(nn.Module):
         # log2_hashmap_size: int = 17,
         num_splashes: int = 4,
         n_features_per_gauss: int = 3,
-        n_neighbours: int = 5,  
+        n_neighbours: int = 5,
+        n_gausses: int = 10000,  
         splits: List[float] = [0.875, 0.9375],
         std_init_factor: float = 1.0,
         fixed_std: bool = False,
@@ -55,7 +56,7 @@ class NetworkwithSplashEncoding(nn.Module):
         
         self.encoding = SplashEncoding(std_init_factor=std_init_factor, fixed_std=fixed_std, 
                                        decay_factor=decay_factor, n_neighbours=n_neighbours,
-                                       n_features_per_gauss=n_features_per_gauss)
+                                       n_features_per_gauss=n_features_per_gauss, n_gausses=n_gausses)
         
         input_dim = n_features_per_gauss
         self.mlp = tcnn.Network(

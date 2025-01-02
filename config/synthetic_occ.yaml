@@ -25,8 +25,8 @@ render:
 model:
     log2_hashmap_size: 17
     n_levels: 16
-    n_neighbours: 50
-    n_features_per_gauss: 5
+    n_neighbours: 16
+    n_features_per_gauss: 10
     max_resolution: 1024
     num_splashes: 4
     fixed_std: False
@@ -34,6 +34,7 @@ model:
     std_final_factor: 5
     load_model_path: ""
     splits: [0.875, 0.9375]
+    n_gausses: 40000
 
 occupancy:
     grid_resolution: 128
@@ -52,7 +53,7 @@ scheduler:
 trainer:
     max_steps: 1000
     log_every: 200
-    save_every: 20000
+    save_every: 100
     visualize_every: 500
     size_decay_every: 100
 

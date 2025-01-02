@@ -93,6 +93,7 @@ class LagHashRadianceField(torch.nn.Module):
         std_init_factor: float = 1.0,
         fixed_std: bool = False,
         decay_factor: int = 1,
+        n_gausses: int = 10000,
     ) -> None:
         super().__init__()
         if not isinstance(aabb, torch.Tensor):
@@ -153,6 +154,7 @@ class LagHashRadianceField(torch.nn.Module):
             decay_factor=decay_factor,
             n_features_per_gauss=n_features_per_gauss,
             n_neighbours=n_neighbours,
+            n_gausses=n_gausses,
             # xd
             # base_resolution = base_resolution,
             # per_level_scale = per_level_scale,

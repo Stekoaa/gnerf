@@ -28,6 +28,7 @@ class SplashEncoding(nn.Module):
         fixed_std: bool = False,
         decay_factor: int = 1,
         n_neighbours: int = 5,
+        n_gausses: int = 10000,
         n_features_per_gauss: int = 3,
     ):
         """
@@ -91,7 +92,7 @@ class SplashEncoding(nn.Module):
         # xd
         # self.total_feats = sum(self.num_feats)
         # self.total_gaus = sum(self.num_gaus)
-        self.total_gaus = 50000 # fixed number of gauss for now
+        self.total_gaus = n_gausses # fixed number of gauss for now
         # xd 
         # self.feats = torch.randn(self.total_feats, self.n_features_per_level) * 1e-2
         # self.feats = nn.Parameter(self.feats)
@@ -136,26 +137,26 @@ class SplashEncoding(nn.Module):
     #     feats = feats.view(-1, self.num_splashes[lod]+1, self.n_features_per_level)
     #     return feats
 
-    # xd
-    # def get_means(self, lod):
-    #     """
-    #     """
-    #     if self.num_splashes[lod]:
-    #         means = self.means[self.gau_begin_idxes[lod]:self.gau_begin_idxes[lod+1]]
-    #         means = means.view(-1, self.num_splashes[lod], 3)
-    #         return means
-    #     else:
-    #         return None
+    def get_means(self):
+        # xd
+        # if self.num_splashes[lod]:
+        #     means = self.means[self.gau_begin_idxes[lod]:self.gau_begin_idxes[lod+1]]
+        #     means = means.view(-1, self.num_splashes[lod], 3)
+        #     return means
+        # else:
+        #     return None
+        return self.means
 
 
-    def get_stds(self, lod):
-        if self.num_splashes[lod]:
-            stds = self.stds[self.gau_begin_idxes[lod]:self.gau_begin_idxes[lod+1]]
-            stds = stds.view(-1, self.num_splashes[lod], 1)
-            return stds
-        else:
-            return None
-        
+    def get_stds(self):
+        # if self.num_splashes[lod]:
+        #     stds = self.stds[self.gau_begin_idxes[lod]:self.gau_begin_idxes[lod+1]]
+        #     stds = stds.view(-1, self.num_splashes[lod], 1)
+        #     return stds
+        # else:
+        #     return None
+        return self.stds
+
     # xd
     # def interpolate_cuda(self, coords):
     #     """Query multiscale features.
@@ -198,19 +199,54 @@ class SplashEncoding(nn.Module):
         
         return nearest_indices
 
-    def _calculate(self, coords, nearest_gausses_indicies):
-        nearest_features = self.feats[nearest_gausses_indicies]  # [num_coords, num_nearest, feature_dim]
+    # def _calculate(self, coords, nearest_gausses_indicies):
+    #     nearest_features = self.feats[nearest_gausses_indicies]  # [num_coords, num_nearest, feature_dim]
 
-        # Step 2: Compute Gaussian weights for the nearest Gaussians
-        diff = coords[:, None, :] - self.means[nearest_gausses_indicies, :]  # [num_coords, num_nearest, 3] - Difference between coords and means
-        sq_dist = torch.sum(diff ** 2, dim=-1, keepdim=True)  # [num_coords, num_nearest, 1] - Squared distances
-        gau_weights = torch.exp(-sq_dist / (2 * self.stds[nearest_gausses_indicies] ** 2)) / ((torch.sqrt(torch.tensor(2 * torch.pi)) * self.stds[nearest_gausses_indicies]) + 1e-7) # [num_coords, num_nearest, 1]
+    #     # Step 2: Compute Gaussian weights for the nearest Gaussians
+    #     diff = coords[:, None, :] - self.means[nearest_gausses_indicies, :]  # [num_coords, num_nearest, 3] - Difference between coords and means
+    #     sq_dist = torch.sum(diff ** 2, dim=-1, keepdim=True)  # [num_coords, num_nearest, 1] - Squared distances
+    #     gau_weights = torch.exp(-sq_dist / (2 * self.stds[nearest_gausses_indicies] ** 2)) / ((torch.sqrt(torch.tensor(2 * torch.pi)) * self.stds[nearest_gausses_indicies]) + 1e-7) # [num_coords, num_nearest, 1]
 
-        # Step 3: Weight features by Gaussian weights
-        weighted_features = nearest_features * gau_weights  # [num_coords, num_nearest, feature_dim]
+    #     # Step 3: Weight features by Gaussian weights
+    #     weighted_features = nearest_features * gau_weights  # [num_coords, num_nearest, feature_dim]
 
-        # Step 4: Sum weighted features across Gaussians
-        feature_vector = torch.sum(weighted_features, dim=1)  # [num_coords, feature_dim]
+    #     # Step 4: Sum weighted features across Gaussians
+    #     feature_vector = torch.sum(weighted_features, dim=1)  # [num_coords, feature_dim]
+    #     return feature_vector
+
+    def _calculate(self, coords, nearest_gausses_indicies, batch_size=10000):
+        num_coords = coords.shape[0]
+        feature_dim = self.feats.shape[1]
+
+        # Preallocate the output tensor
+        feature_vector = torch.zeros((num_coords, feature_dim), device=coords.device)
+
+        for i in range(0, num_coords, batch_size):
+            # Process the current batch
+            batch_coords = coords[i : i + batch_size]  # [batch_size, 3]
+            batch_indices = nearest_gausses_indicies[i : i + batch_size]  # [batch_size, num_nearest]
+
+            # Gather nearest features
+            nearest_features = self.feats[batch_indices]  # [batch_size, num_nearest, feature_dim]
+
+            # Compute differences and squared distances
+            diff = batch_coords[:, None, :] - self.means[batch_indices]  # [batch_size, num_nearest, 3]
+            sq_dist = torch.sum(diff ** 2, dim=-1, keepdim=True)  # [batch_size, num_nearest, 1]
+
+            # Compute Gaussian weights
+            stds = torch.abs(self.stds[batch_indices])  # [batch_size, num_nearest]
+            gaussian_constant = torch.sqrt(torch.tensor(2 * torch.pi, device=coords.device))
+            gau_weights = torch.exp(-sq_dist / (2 * stds ** 2)) / (gaussian_constant * stds + 1e-7)  # [batch_size, num_nearest, 1]
+
+            # Weight features by Gaussian weights
+            weighted_features = nearest_features * gau_weights  # [batch_size, num_nearest, feature_dim]
+
+            # Sum weighted features across Gaussians
+            batch_feature_vector = torch.sum(weighted_features, dim=1)  # [batch_size, feature_dim]
+
+            # Store results in the preallocated output tensor
+            feature_vector[i : i + batch_size] = batch_feature_vector
+
         return feature_vector
 
     def forward(self, coords, lod_idx=None):
