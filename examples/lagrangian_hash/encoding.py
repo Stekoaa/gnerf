@@ -106,8 +106,8 @@ class SplashEncoding(nn.Module):
         # if not fixed_std:
         #    self.stds = torch.normal(r, 2e-2, size=(self.total_gaus, 1))
         #    self.stds = nn.Parameter(self.stds)
-        self.stds = torch.normal(r, 2e-2, size=(self.total_gaus, 1), device='cuda')
-        self.stds = nn.Parameter(self.stds)
+        if not fixed_std:
+            self.stds = nn.Parameter(torch.normal(r, 2e-2, size=(self.total_gaus, 1), device='cuda'))
         self.n_neighbours = n_neighbours
     
     def init_mean(self):
@@ -185,10 +185,9 @@ class SplashEncoding(nn.Module):
     #     return feats, gmm
 
     def _get_nearest_gausses_indicies(self, coords):
-        batch_size = 10000
+        batch_size = 1000
         n_coords = coords.shape[0]
         
-        #nearest_means = torch.empty((n_coords, self.n_neighbours, 3), device=coords.device)
         nearest_indices = torch.empty((n_coords, self.n_neighbours), device=coords.device, dtype=int)
         
         for i in range(0, n_coords, batch_size):
@@ -214,37 +213,28 @@ class SplashEncoding(nn.Module):
     #     feature_vector = torch.sum(weighted_features, dim=1)  # [num_coords, feature_dim]
     #     return feature_vector
 
-    def _calculate(self, coords, nearest_gausses_indicies, batch_size=10000):
+    def _calculate(self, coords, nearest_gausses_indicies, batch_size=1000):
         num_coords = coords.shape[0]
         feature_dim = self.feats.shape[1]
 
-        # Preallocate the output tensor
         feature_vector = torch.zeros((num_coords, feature_dim), device=coords.device)
 
         for i in range(0, num_coords, batch_size):
-            # Process the current batch
             batch_coords = coords[i : i + batch_size]  # [batch_size, 3]
             batch_indices = nearest_gausses_indicies[i : i + batch_size]  # [batch_size, num_nearest]
 
-            # Gather nearest features
             nearest_features = self.feats[batch_indices]  # [batch_size, num_nearest, feature_dim]
 
-            # Compute differences and squared distances
             diff = batch_coords[:, None, :] - self.means[batch_indices]  # [batch_size, num_nearest, 3]
             sq_dist = torch.sum(diff ** 2, dim=-1, keepdim=True)  # [batch_size, num_nearest, 1]
 
-            # Compute Gaussian weights
             stds = torch.abs(self.stds[batch_indices])  # [batch_size, num_nearest]
             gaussian_constant = torch.sqrt(torch.tensor(2 * torch.pi, device=coords.device))
             gau_weights = torch.exp(-sq_dist / (2 * stds ** 2)) / (gaussian_constant * stds + 1e-7)  # [batch_size, num_nearest, 1]
 
-            # Weight features by Gaussian weights
             weighted_features = nearest_features * gau_weights  # [batch_size, num_nearest, feature_dim]
-
-            # Sum weighted features across Gaussians
             batch_feature_vector = torch.sum(weighted_features, dim=1)  # [batch_size, feature_dim]
 
-            # Store results in the preallocated output tensor
             feature_vector[i : i + batch_size] = batch_feature_vector
 
         return feature_vector

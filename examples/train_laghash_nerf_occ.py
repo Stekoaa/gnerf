@@ -305,7 +305,7 @@ def run(cfg: DictConfig):
         #         i += 1
         if i > 0:
             sigma_loss /= i
-            surf_loss = kl_div.mean()
+        surf_loss = kl_div.mean()
 
         loss = calculate_smooth_l1_loss(rgb, pixels)
         if cfg.trainer.weight_surface:
