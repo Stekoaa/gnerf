@@ -1,3 +1,5 @@
+import logging
+
 from typing import Callable, Optional, List
 from arrgh import arrgh
 
@@ -18,16 +20,21 @@ except ImportError as e:
     )
     exit()
 
+log = logging.getLogger(__name__)
 
 class NetworkwithSplashEncoding(nn.Module):
     def __init__(
         self,
-        base_resolution: int = 16,
-        per_level_scale: int = 1.47,
-        n_levels: int = 16,
-        n_features_per_level: int = 2,
-        num_splashes: int = 4, 
-        log2_hashmap_size: int = 17,
+        # xd
+        # base_resolution: int = 16,
+        # per_level_scale: int = 1.47,
+        # n_levels: int = 16,
+        # n_features_per_level: int = 2,
+        # log2_hashmap_size: int = 17,
+        num_splashes: int = 4,
+        n_features_per_gauss: int = 3,
+        n_neighbours: int = 5,
+        n_gausses: int = 10000,  
         splits: List[float] = [0.875, 0.9375],
         std_init_factor: float = 1.0,
         fixed_std: bool = False,
@@ -39,14 +46,19 @@ class NetworkwithSplashEncoding(nn.Module):
         output_activation: str = "None",
     ):
         super().__init__()
-
-        self.encoding = SplashEncoding(base_resolution=base_resolution, per_level_scale=per_level_scale,
-                                       n_levels=n_levels, n_features_per_level=n_features_per_level, 
-                                       num_splashes=num_splashes, log2_hashmap_size=log2_hashmap_size,
-                                       splits=splits, std_init_factor=std_init_factor, fixed_std=fixed_std, 
-                                       decay_factor=decay_factor)
         
-        input_dim = n_features_per_level * n_levels
+        # xd
+        # self.encoding = SplashEncoding(base_resolution=base_resolution, per_level_scale=per_level_scale,
+        #                                n_levels=n_levels, n_features_per_level=n_features_per_level, 
+        #                                num_splashes=num_splashes, log2_hashmap_size=log2_hashmap_size,
+        #                                splits=splits, std_init_factor=std_init_factor, fixed_std=fixed_std, 
+        #                                decay_factor=decay_factor)
+        
+        self.encoding = SplashEncoding(std_init_factor=std_init_factor, fixed_std=fixed_std, 
+                                       decay_factor=decay_factor, n_neighbours=n_neighbours,
+                                       n_features_per_gauss=n_features_per_gauss, n_gausses=n_gausses)
+        
+        input_dim = n_features_per_gauss
         self.mlp = tcnn.Network(
                 n_input_dims=input_dim,
                 n_output_dims=output_dim,

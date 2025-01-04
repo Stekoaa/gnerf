@@ -160,7 +160,7 @@ def rendering(
         depths = depths / opacities.clamp_min(torch.finfo(rgbs.dtype).eps)
 
     # gmm_deltas = gmm * (t_ends - t_starts)[..., None]
-    bin_entropys = weights[..., None].detach() * gmm
+    bin_entropys = weights[..., None].detach()
     kl_divs = accumulate_along_rays(
         torch.ones_like(weights), values=bin_entropys, ray_indices=ray_indices, n_rays=n_rays
     )

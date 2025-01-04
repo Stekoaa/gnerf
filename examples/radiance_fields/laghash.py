@@ -1,6 +1,7 @@
 """
 Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
+import logging
 
 from typing import Callable, List, Union
 
@@ -21,6 +22,7 @@ except ImportError as e:
     )
     exit()
 
+log = logging.getLogger(__name__)
 
 class _TruncExp(Function):  # pylint: disable=abstract-method
     # Implementation from torch-ngp:
@@ -78,16 +80,20 @@ class LagHashRadianceField(torch.nn.Module):
         use_viewdirs: bool = True,
         density_activation: Callable = lambda x: trunc_exp(x - 1),
         unbounded: bool = False,
-        base_resolution: int = 16,
-        max_resolution: int = 1024,
         geo_feat_dim: int = 15,
-        n_levels: int = 16,
+        # xd
+        # base_resolution: int = 16,
+        # max_resolution: int = 1024,
+        # n_levels: int = 16,
+        # log2_hashmap_size: int = 17,
+        n_features_per_gauss: int = 3,
+        n_neighbours: int = 5,
         num_splashes: int = 4,
-        log2_hashmap_size: int = 17,
         splits: List[float] = [0.875, 0.9375],
         std_init_factor: float = 1.0,
         fixed_std: bool = False,
         decay_factor: int = 1,
+        n_gausses: int = 10000,
     ) -> None:
         super().__init__()
         if not isinstance(aabb, torch.Tensor):
@@ -104,19 +110,21 @@ class LagHashRadianceField(torch.nn.Module):
         self.use_viewdirs = use_viewdirs
         self.density_activation = density_activation
         self.unbounded = unbounded
-        self.base_resolution = base_resolution
-        self.max_resolution = max_resolution
         self.geo_feat_dim = geo_feat_dim
-        self.n_levels = n_levels
-        self.log2_hashmap_size = log2_hashmap_size
+        # xd
+        # self.base_resolution = base_resolution
+        # self.max_resolution = max_resolution
+        # self.n_levels = n_levels
+        # self.log2_hashmap_size = log2_hashmap_size
         self.std_init_factor = std_init_factor
         self.fixed_std = fixed_std
         self.decay_factor = decay_factor
         self.splits = splits
 
-        per_level_scale = np.exp(
-            (np.log(max_resolution) - np.log(base_resolution)) / (n_levels - 1)
-        ).tolist()
+        # xd
+        # per_level_scale = np.exp(
+        #     (np.log(max_resolution) - np.log(base_resolution)) / (n_levels - 1)
+        # ).tolist()
 
         if self.use_viewdirs:
             self.direction_encoding = tcnn.Encoding(
@@ -135,16 +143,21 @@ class LagHashRadianceField(torch.nn.Module):
             )
 
         self.mlp_base = lagrangian_hash.NetworkwithSplashEncoding(
-            n_levels = n_levels,
-            num_splashes=num_splashes,
-            n_features_per_level = 2,
-            log2_hashmap_size = log2_hashmap_size,
-            splits=splits,
+            # xd
+            # n_levels = n_levels,
+            # num_splashes=num_splashes,
+            # n_features_per_level = 2,
+            # log2_hashmap_size = log2_hashmap_size,
+            # splits=splits,
             std_init_factor = std_init_factor,
             fixed_std = fixed_std,
             decay_factor=decay_factor,
-            base_resolution = base_resolution,
-            per_level_scale = per_level_scale,
+            n_features_per_gauss=n_features_per_gauss,
+            n_neighbours=n_neighbours,
+            n_gausses=n_gausses,
+            # xd
+            # base_resolution = base_resolution,
+            # per_level_scale = per_level_scale,
             output_dim=1 + self.geo_feat_dim,
             net_depth=1,
             net_width=64,
@@ -254,72 +267,3 @@ class LagHashRadianceField(torch.nn.Module):
                 density, embedding, gmm = self.query_density(positions, return_feat=True, return_gmm=True)
                 rgb = self._query_rgb(directions, embedding=embedding)
         return rgb, density, gmm  # type: ignore
-
-
-# class NGPDensityField(torch.nn.Module):
-#     """Instance-NGP Density Field used for resampling"""
-
-#     def __init__(
-#         self,
-#         aabb: Union[torch.Tensor, List[float]],
-#         num_dim: int = 3,
-#         density_activation: Callable = lambda x: trunc_exp(x - 1),
-#         unbounded: bool = False,
-#         base_resolution: int = 16,
-#         max_resolution: int = 128,
-#         n_levels: int = 5,
-#         log2_hashmap_size: int = 17,
-#     ) -> None:
-#         super().__init__()
-#         if not isinstance(aabb, torch.Tensor):
-#             aabb = torch.tensor(aabb, dtype=torch.float32)
-#         self.register_buffer("aabb", aabb)
-#         self.num_dim = num_dim
-#         self.density_activation = density_activation
-#         self.unbounded = unbounded
-#         self.base_resolution = base_resolution
-#         self.max_resolution = max_resolution
-#         self.n_levels = n_levels
-#         self.log2_hashmap_size = log2_hashmap_size
-
-#         per_level_scale = np.exp(
-#             (np.log(max_resolution) - np.log(base_resolution)) / (n_levels - 1)
-#         ).tolist()
-
-#         self.mlp_base = tcnn.NetworkWithInputEncoding(
-#             n_input_dims=num_dim,
-#             n_output_dims=1,
-#             encoding_config={
-#                 "otype": "HashGrid",
-#                 "n_levels": n_levels,
-#                 "n_features_per_level": 2,
-#                 "log2_hashmap_size": log2_hashmap_size,
-#                 "base_resolution": base_resolution,
-#                 "per_level_scale": per_level_scale,
-#             },
-#             network_config={
-#                 "otype": "FullyFusedMLP",
-#                 "activation": "ReLU",
-#                 "output_activation": "None",
-#                 "n_neurons": 64,
-#                 "n_hidden_layers": 1,
-#             },
-#         )
-
-#     def forward(self, positions: torch.Tensor):
-#         if self.unbounded:
-#             positions = contract_to_unisphere(positions, self.aabb)
-#         else:
-#             aabb_min, aabb_max = torch.split(self.aabb, self.num_dim, dim=-1)
-#             positions = (positions - aabb_min) / (aabb_max - aabb_min)
-#         selector = ((positions > 0.0) & (positions < 1.0)).all(dim=-1)
-#         density_before_activation = (
-#             self.mlp_base(positions.view(-1, self.num_dim))
-#             .view(list(positions.shape[:-1]) + [1])
-#             .to(positions)
-#         )
-#         density = (
-#             self.density_activation(density_before_activation)
-#             * selector[..., None]
-#         )
-#         return density
