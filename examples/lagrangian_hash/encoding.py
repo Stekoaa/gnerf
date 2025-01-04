@@ -108,6 +108,9 @@ class SplashEncoding(nn.Module):
         #    self.stds = nn.Parameter(self.stds)
         if not fixed_std:
             self.stds = nn.Parameter(torch.normal(r, 2e-2, size=(self.total_gaus, 1), device='cuda'))
+
+        self.self.quaterions = nn.Parameter(torch.normal(r, 2e-2, size=(self.total_gaus), 4), device='cuda')
+        self.scaling = nn.Parameter(torch.normal(r, 2e-2, size=(self.total_gaus), 3), device='cuda')
         self.n_neighbours = n_neighbours
     
     def init_mean(self):
@@ -250,6 +253,42 @@ class SplashEncoding(nn.Module):
         gmm=None
         return feats, gmm
     
+    def calculate_rotation():
+        norm = torch.sqrt(
+            self.quaterions[:,0]*self.quaterions[:,0] +
+            self.quaterions[:,1]*self.quaterions[:,1] +
+            self.quaterions[:,2]*self.quaterions[:,2] +
+            self.quaterions[:,3]*self.quaterions[:,3])
+    
+        q = self.quaterions / norm[:, None]
+
+        R = torch.zeros((q.size(0), 3, 3), device='cuda')
+
+        r = q[:, 0]
+        x = q[:, 1]
+        y = q[:, 2]
+        z = q[:, 3]
+
+        R[:, 0, 0] = 1 - 2 * (y*y + z*z)
+        R[:, 0, 1] = 2 * (x*y - r*z)
+        R[:, 0, 2] = 2 * (x*z + r*y)
+        R[:, 1, 0] = 2 * (x*y + r*z)
+        R[:, 1, 1] = 1 - 2 * (x*x + z*z)
+        R[:, 1, 2] = 2 * (y*z - r*x)
+        R[:, 2, 0] = 2 * (x*z - r*y)
+        R[:, 2, 1] = 2 * (y*z + r*x)
+        R[:, 2, 2] = 1 - 2 * (x*x + y*y)
+
+        return R
+    
+    def calculate_scaling():
+        L = torch.zeros((s.shape[0], 3, 3), dtype=torch.float, device="cuda")
+
+        L[:,0,0] = s[:,0]
+        L[:,1,1] = s[:,1]
+        L[:,2,2] = s[:,2]
+
+        return L
     # xd
     # def hash_index(self, coords, resolution, codebook_size):
     #     prime = [1, 2654435761, 805459861]
