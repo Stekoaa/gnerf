@@ -232,6 +232,8 @@ def run(cfg: DictConfig):
             dataset_params["far_plane"],
             dataset_params["white_bg"]
         )
+        
+
     else:
         error_message = f"Invalid scene: {cfg.dataset.scene}"
         logging.error(error_message)
@@ -248,151 +250,152 @@ def run(cfg: DictConfig):
     optimizer = initialize_optimizer(cfg, radiance_field, weight_decay)
     scheduler = initialize_scheduler(cfg, optimizer)
     
-    # training
-    log.info('Starting training')
-    tic = time.time()
-    for step in tqdm(range(max_steps + 1), desc="Training"):
-        radiance_field.train()
-        estimator.train()
+    if not cfg.trainer.eval_only:
+        # training
+        log.info('Starting training')
+        tic = time.time()
+        for step in tqdm(range(max_steps + 1), desc="Training"):
+            radiance_field.train()
+            estimator.train()
 
-        i = torch.randint(0, len(train_dataset), (1,)).item()
-        data = train_dataset[i]
-        render_bkgd, rays, pixels = retrieve_image_data(data)
+            i = torch.randint(0, len(train_dataset), (1,)).item()
+            data = train_dataset[i]
+            render_bkgd, rays, pixels = retrieve_image_data(data)
 
-        def occ_eval_fn(x):
-            density = radiance_field.query_density(x)
-            return density * render_step_size
+            def occ_eval_fn(x):
+                density = radiance_field.query_density(x)
+                return density * render_step_size
 
-        # update occupancy grid
-        estimator.update_every_n_steps(
-            step=step,
-            occ_eval_fn=occ_eval_fn,
-            occ_thre=1e-2,
-        )
-
-        # render
-        rgb, acc, depth, kl_div, n_rendering_samples, mip_loss = render_image_with_occgrid(
-            radiance_field,
-            estimator,
-            rays,
-            # rendering options
-            near_plane=near_plane,
-            render_step_size=render_step_size,
-            render_bkgd=render_bkgd,
-            cone_angle=cone_angle,
-            alpha_thre=alpha_thre,
-        )
-
-        if n_rendering_samples == 0:
-            continue
-
-        if target_sample_batch_size > 0:
-            # dynamic batch size for rays to keep sample batch size constant.
-            num_rays = int(len(pixels) * (target_sample_batch_size / float(n_rendering_samples)))
-            train_dataset.update_num_rays(num_rays)
-
-        # compute loss
-        loss_warm_up = calculate_loss_warmup(step, max_steps)
-        mip_loss = mip_loss.mean() # distortion loss
-        sigma_loss, surf_loss, i = 0, 0, 0
-        
-        # TODO: tu coś trzeba pomajstrować
-        # for idx in range(radiance_field.n_levels):
-        #     resolution = radiance_field.mlp_base.encoding.resolutions[idx]
-        #     stds = radiance_field.mlp_base.encoding.get_stds(idx)
-        #     if stds is not None:
-        #         sigma_loss += calculate_lod_sigma_loss(resolution, stds)
-        #         i += 1
-        if i > 0:
-            sigma_loss /= i
-        surf_loss = kl_div.mean()
-
-        loss = calculate_smooth_l1_loss(rgb, pixels)
-        if cfg.trainer.weight_surface:
-            loss += cfg.trainer.weight_surface * loss_warm_up * surf_loss
-        if cfg.trainer.weight_sigma and (not cfg.model.fixed_std):
-            loss += cfg.trainer.weight_sigma * loss_warm_up * sigma_loss
-        if cfg.trainer.weight_mip:
-            loss += cfg.trainer.weight_mip * mip_loss
-
-        optimizer.zero_grad()
-        # do not unscale it because we are using Adam.
-        grad_scaler.scale(loss).backward()
-        optimizer.step()
-        scheduler.step()
-
-        if step % cfg.trainer.log_every == 0:
-            elapsed_time = time.time() - tic
-            log.info(
-                f"Training info: "
-                f"step={step} | elapsed_time={elapsed_time:.2f}s | "
-                f"whole_loss={loss:.5f} | surf_loss={surf_loss:.5f} | " 
-                f"sigma_loss={sigma_loss:.5f} | n_rendering_samples={n_rendering_samples:d} | "
-                f"max_depth={depth.max():.3f} | "
+            # update occupancy grid
+            estimator.update_every_n_steps(
+                step=step,
+                occ_eval_fn=occ_eval_fn,
+                occ_thre=1e-2,
             )
-        
-        if (step % cfg.trainer.size_decay_every == cfg.trainer.size_decay_every-1) and cfg.model.fixed_std:
-            radiance_field.mlp_base.encoding.update_factor()
 
-        if step % cfg.trainer.save_every == 0:
-            state_dict = {
-                "steps": step,
-                "model": radiance_field.state_dict(),
-                "occupancy": estimator.state_dict(),
-                "optimizer": optimizer.state_dict(),
-            }
+            # render
+            rgb, acc, depth, kl_div, n_rendering_samples, mip_loss = render_image_with_occgrid(
+                radiance_field,
+                estimator,
+                rays,
+                # rendering options
+                near_plane=near_plane,
+                render_step_size=render_step_size,
+                render_bkgd=render_bkgd,
+                cone_angle=cone_angle,
+                alpha_thre=alpha_thre,
+            )
+
+            if n_rendering_samples == 0:
+                continue
+
+            if target_sample_batch_size > 0:
+                # dynamic batch size for rays to keep sample batch size constant.
+                num_rays = int(len(pixels) * (target_sample_batch_size / float(n_rendering_samples)))
+                train_dataset.update_num_rays(num_rays)
+
+            # compute loss
+            loss_warm_up = calculate_loss_warmup(step, max_steps)
+            mip_loss = mip_loss.mean() # distortion loss
+            sigma_loss, surf_loss, i = 0, 0, 0
             
-            model_output_path = f"{output_path}/model.pth"
-            torch.save(state_dict, model_output_path)
-            log.info(f"Model saved to {model_output_path}")
-            
-            # xd
+            # TODO: tu coś trzeba pomajstrować
             # for idx in range(radiance_field.n_levels):
-            #     means = radiance_field.mlp_base.encoding.get_means(idx)
-            #     if means is not None:
-            #         means = means.reshape(-1, means.shape[-1])
-            #         means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
-            #         if step > 0:
-            #             os.remove(os.path.join(output_path, f'means_lod{idx}@{step-cfg.trainer.save_every:05d}.ply'))
-                    
-            #         means_lod_path = os.path.join(output_path, f'means_lod{idx}@{step:05d}.ply')
-            #         means_cloud.export(means_lod_path)
-            #         log.info(f"Means saved to {means_lod_path}")
+            #     resolution = radiance_field.mlp_base.encoding.resolutions[idx]
+            #     stds = radiance_field.mlp_base.encoding.get_stds(idx)
+            #     if stds is not None:
+            #         sigma_loss += calculate_lod_sigma_loss(resolution, stds)
+            #         i += 1
+            if i > 0:
+                sigma_loss /= i
+            surf_loss = kl_div.mean()
 
-            means = radiance_field.mlp_base.encoding.get_means()
-            means = means.reshape(-1, means.shape[-1])
-            means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
-            if step > 0:
-                os.remove(os.path.join(output_path, f'means@{step-cfg.trainer.save_every:05d}.ply'))
+            loss = calculate_smooth_l1_loss(rgb, pixels)
+            if cfg.trainer.weight_surface:
+                loss += cfg.trainer.weight_surface * loss_warm_up * surf_loss
+            if cfg.trainer.weight_sigma and (not cfg.model.fixed_std):
+                loss += cfg.trainer.weight_sigma * loss_warm_up * sigma_loss
+            if cfg.trainer.weight_mip:
+                loss += cfg.trainer.weight_mip * mip_loss
+
+            optimizer.zero_grad()
+            # do not unscale it because we are using Adam.
+            grad_scaler.scale(loss).backward()
+            optimizer.step()
+            scheduler.step()
+
+            if step % cfg.trainer.log_every == 0:
+                elapsed_time = time.time() - tic
+                log.info(
+                    f"Training info: "
+                    f"step={step} | elapsed_time={elapsed_time:.2f}s | "
+                    f"whole_loss={loss:.5f} | surf_loss={surf_loss:.5f} | " 
+                    f"sigma_loss={sigma_loss:.5f} | n_rendering_samples={n_rendering_samples:d} | "
+                    f"max_depth={depth.max():.3f} | "
+                )
             
-            means_lod_path = os.path.join(output_path, f'means@{step:05d}.ply')
-            means_cloud.export(means_lod_path)
-            log.info(f"Means saved to {means_lod_path}")
-        
-        # if step % cfg.trainer.visualize_every == 0 and step > 0:
-        #     log.info("Starting validation")
-        #     radiance_field.eval()
-        #     estimator.eval()
+            if (step % cfg.trainer.size_decay_every == cfg.trainer.size_decay_every-1) and cfg.model.fixed_std:
+                radiance_field.mlp_base.encoding.update_factor()
 
-        #     with torch.no_grad():
-        #         data = test_dataset[0]
-        #         render_bkgd, rays, pixels = retrieve_image_data(data)
-        #         rgb, _, _, _, _, _ = render_image_with_occgrid(
-        #             radiance_field,
-        #             estimator,
-        #             rays,
-        #             # rendering options
-        #             near_plane=near_plane,
-        #             render_step_size=render_step_size,
-        #             render_bkgd=render_bkgd,
-        #             cone_angle=cone_angle,
-        #             alpha_thre=alpha_thre,
-        #         )
-        #         visualize = torch.concatenate([rgb, pixels], dim=1)
-        #         writer.add_image("visual/rgb", visualize,  step, dataformats="HWC")
+            if step % cfg.trainer.save_every == 0:
+                state_dict = {
+                    "steps": step,
+                    "model": radiance_field.state_dict(),
+                    "occupancy": estimator.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                }
                 
-        #     psnr = calculate_psnr(rgb, pixels)
-        #     log.info(f"Validation: psnr={psnr:.2f}")
+                model_output_path = f"{output_path}/model.pth"
+                torch.save(state_dict, model_output_path)
+                log.info(f"Model saved to {model_output_path}")
+                
+                # xd
+                # for idx in range(radiance_field.n_levels):
+                #     means = radiance_field.mlp_base.encoding.get_means(idx)
+                #     if means is not None:
+                #         means = means.reshape(-1, means.shape[-1])
+                #         means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
+                #         if step > 0:
+                #             os.remove(os.path.join(output_path, f'means_lod{idx}@{step-cfg.trainer.save_every:05d}.ply'))
+                        
+                #         means_lod_path = os.path.join(output_path, f'means_lod{idx}@{step:05d}.ply')
+                #         means_cloud.export(means_lod_path)
+                #         log.info(f"Means saved to {means_lod_path}")
+
+                means = radiance_field.mlp_base.encoding.get_means()
+                means = means.reshape(-1, means.shape[-1])
+                means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
+                if step > 0:
+                    os.remove(os.path.join(output_path, f'means@{step-cfg.trainer.save_every:05d}.ply'))
+                
+                means_lod_path = os.path.join(output_path, f'means@{step:05d}.ply')
+                means_cloud.export(means_lod_path)
+                log.info(f"Means saved to {means_lod_path}")
+            
+            # if step % cfg.trainer.visualize_every == 0 and step > 0:
+            #     log.info("Starting validation")
+            #     radiance_field.eval()
+            #     estimator.eval()
+
+            #     with torch.no_grad():
+            #         data = test_dataset[0]
+            #         render_bkgd, rays, pixels = retrieve_image_data(data)
+            #         rgb, _, _, _, _, _ = render_image_with_occgrid(
+            #             radiance_field,
+            #             estimator,
+            #             rays,
+            #             # rendering options
+            #             near_plane=near_plane,
+            #             render_step_size=render_step_size,
+            #             render_bkgd=render_bkgd,
+            #             cone_angle=cone_angle,
+            #             alpha_thre=alpha_thre,
+            #         )
+            #         visualize = torch.concatenate([rgb, pixels], dim=1)
+            #         writer.add_image("visual/rgb", visualize,  step, dataformats="HWC")
+                    
+            #     psnr = calculate_psnr(rgb, pixels)
+            #     log.info(f"Validation: psnr={psnr:.2f}")
 
     # evaluation
     log.info('Starting evaluation')
