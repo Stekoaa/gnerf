@@ -56,6 +56,7 @@ trainer:
     save_every: 100
     visualize_every: 500
     size_decay_every: 100
+    eval_only: False
 
     weight_surface: 1e-3
     weight_sigma: 1e-3
