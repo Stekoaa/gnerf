@@ -109,8 +109,8 @@ class SplashEncoding(nn.Module):
         if not fixed_std:
             self.stds = nn.Parameter(torch.normal(r, 2e-2, size=(self.total_gaus, 1), device='cuda'))
 
-        self.self.quaterions = nn.Parameter(torch.normal(r, 2e-2, size=(self.total_gaus), 4), device='cuda')
-        self.scaling = nn.Parameter(torch.normal(r, 2e-2, size=(self.total_gaus), 3), device='cuda')
+        self.quaterions = nn.Parameter(torch.normal(r, 2e-2, size=(self.total_gaus, 4), device='cuda'))
+        self.scaling = nn.Parameter(torch.normal(r, 2e-2, size=(self.total_gaus, 3), device='cuda'))
         self.n_neighbours = n_neighbours
     
     def init_mean(self):
@@ -232,6 +232,13 @@ class SplashEncoding(nn.Module):
             sq_dist = torch.sum(diff ** 2, dim=-1, keepdim=True)  # [batch_size, num_nearest, 1]
 
             stds = torch.abs(self.stds[batch_indices])  # [batch_size, num_nearest]
+            quas = self.quaterions[batch_indices]
+            scales = self.scaling[batch_indices]
+            print(scales.shape)
+            print(quas.shape)
+            print(stds.shape)
+            0/0
+            
             gaussian_constant = torch.sqrt(torch.tensor(2 * torch.pi, device=coords.device))
             gau_weights = torch.exp(-sq_dist / (2 * stds ** 2)) / (gaussian_constant * stds + 1e-7)  # [batch_size, num_nearest, 1]
 
