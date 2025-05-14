@@ -63,5 +63,21 @@ if __name__ == "__main__":
     # Load the shared library
     lib_knn = ctypes.CDLL('/workspace/gnerf/examples/lagrangian_hash/knn/lib_kernel.so')
 
+    # Prepare output arrays for distances and gauss_indices
+    NUMBER_OF_SAMPLES = 128  # Set this to match the C++ side
+
+    distances = (ctypes.c_float * NUMBER_OF_SAMPLES)()
+    gauss_indices = (ctypes.c_int * NUMBER_OF_SAMPLES)()
+
     # Call function
-    lib_knn.fit(ctypes.byref(GC), NUMBER_OF_GAUSSIANS)
+    lib_knn.fit(
+        ctypes.byref(GC),
+        NUMBER_OF_GAUSSIANS,
+        ctypes.byref(distances),
+        ctypes.byref(gauss_indices)
+    )
+
+    # Print some results
+    print("First 10 distances and gauss_indices:")
+    for i in range(10):
+        print(f"Distance {i}: {distances[i]}, Gauss Index: {gauss_indices[i]}")

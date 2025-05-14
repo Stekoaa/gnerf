@@ -992,7 +992,7 @@ extern "C" bool RenderOptiX(SOptiXRenderParams& params_OptiX) {
 	return true;
 }
 
-extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians) {
+extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians, float* distances, int* gauss_indices) {
 
 	SRenderParams params;
 	params.GC = GC;
@@ -1021,11 +1021,10 @@ extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians) {
 
 	success = RenderOptiX(params_OptiX);
 	printf("OptiX Rendered: %s\n", success ? "true" : "false");
-
-	// Assuming params_OptiX.distances_host is a pointer to the distances array on the host
-	for (int i = 0; i < NUMBER_OF_SAMPLES; i++) {
-		float distance = params_OptiX.distances_host[i];
-		int gauss_index = params_OptiX.gauss_indices_host[i];
-		printf("Distance %d: %f, Gauss Index: %d\n", i, distance, gauss_index);
+	
+	// Copy data into memory provided by Python
+	for (int i = 0; i < NUMBER_OF_SAMPLES; ++i) {
+		distances[i] = params_OptiX.distances_host[i];
+		gauss_indices[i] = params_OptiX.gauss_indices_host[i];
 	}
 }
