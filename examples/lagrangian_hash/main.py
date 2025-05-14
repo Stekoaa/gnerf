@@ -21,6 +21,13 @@ class SGaussianComponent(ctypes.Structure):
         ('sZ', ctypes.c_float)
     ]
 
+class float3(ctypes.Structure):
+    _fields_ = [
+        ('x', ctypes.c_float),
+        ('y', ctypes.c_float),
+        ('z', ctypes.c_float)
+    ]
+
 def random_spherical_gaussian():
     # Generate random spherical coordinates
     r = random.random() * 10
@@ -46,14 +53,24 @@ if __name__ == "__main__":
 
     # Define constants
     NUMBER_OF_GAUSSIANS = 1000
+    NUMBER_OF_POINTS = 1000
 
     # Create an array of SGaussianComponent structs
     GC_Array = SGaussianComponent * NUMBER_OF_GAUSSIANS
     GC = GC_Array()
 
+    float3_Array = float3 * NUMBER_OF_POINTS
+    coords = float3_Array()
+
     # Initialize the array with random values
     for i in range(NUMBER_OF_GAUSSIANS):
         GC[i] = random_spherical_gaussian()
+
+    for i in range(NUMBER_OF_POINTS):
+        # Generate random coordinates
+        coords[i].x = random.uniform(-10, 10)
+        coords[i].y = random.uniform(-10, 10)
+        coords[i].z = random.uniform(-10, 10)
 
     print("First Gaussian Component:")
     print("mX:", GC[0].mX, "mY:", GC[0].mY, "mZ:", GC[0].mZ)
@@ -64,20 +81,20 @@ if __name__ == "__main__":
     lib_knn = ctypes.CDLL('/workspace/gnerf/examples/lagrangian_hash/knn/lib_kernel.so')
 
     # Prepare output arrays for distances and gauss_indices
-    NUMBER_OF_SAMPLES = 128  # Set this to match the C++ side
-
-    distances = (ctypes.c_float * NUMBER_OF_SAMPLES)()
-    gauss_indices = (ctypes.c_int * NUMBER_OF_SAMPLES)()
+    distances = (ctypes.c_float * NUMBER_OF_POINTS)()
+    gauss_indices = (ctypes.c_int * NUMBER_OF_POINTS)()
 
     # Call function
     lib_knn.fit(
         ctypes.byref(GC),
         NUMBER_OF_GAUSSIANS,
+        ctypes.byref(coords),
+        NUMBER_OF_POINTS,
         ctypes.byref(distances),
         ctypes.byref(gauss_indices)
     )
 
     # Print some results
     print("First 10 distances and gauss_indices:")
-    for i in range(10):
+    for i in range(100):
         print(f"Distance {i}: {distances[i]}, Gauss Index: {gauss_indices[i]}")

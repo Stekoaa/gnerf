@@ -24,8 +24,6 @@ const int NUMBER_OF_FACES = 20;
 
 const double REALLOC_MULTIPLIER2 = 1.51;
 
-const int NUMBER_OF_SAMPLES = 128;
-
 #define SSIM_REDUCE_MEMORY_OVERHEAD
 //#define RENDERER_OPTIX_USE_DOUBLE_PRECISION
 //#define GRADIENT_OPTIX_USE_DOUBLE_PRECISION
@@ -126,6 +124,30 @@ struct SRenderParams {
 
 // *************************************************************************************************
 
+struct LaunchParams {
+	unsigned width;
+	unsigned height;
+
+	OptixTraversableHandle traversable;
+
+	float4 *GC_part_1;
+	float4 *GC_part_2;
+	float4 *GC_part_3;
+	float2 *GC_part_4;
+
+	float chi_square_squared_radius;
+
+	float max_t;
+	float max_R;
+	float *distances;
+	int *gauss_indices;
+
+	float3 *coords;
+	int batch_size;
+};
+
+// *************************************************************************************************
+
 struct SOptiXRenderParams {
 	// RENDERER
 	OptixDeviceContext optixContext;
@@ -154,11 +176,6 @@ struct SOptiXRenderParams {
 
 	unsigned width;
 	unsigned height;
-
-	float3 O;
-	float3 R, D, F;
-	float double_tan_half_fov_x;
-	float double_tan_half_fov_y;
 
 	float4 *GC_part_1_1, *GC_part_1_2;
 	float4 *GC_part_2_1, *GC_part_2_2;
@@ -215,4 +232,7 @@ struct SOptiXRenderParams {
 	float *distances_host;
 	int *gauss_indices;
 	int *gauss_indices_host;
+
+	float3 *coords;
+	int batch_size;
 };

@@ -4,32 +4,6 @@
 
 // *************************************************************************************************
 
-struct LaunchParams {
-	unsigned width;
-	unsigned height;
-
-	float3 O;
-	float3 R, D, F;
-	float double_tan_half_fov_x;
-	float double_tan_half_fov_y;
-
-	OptixTraversableHandle traversable;
-
-	float4 *GC_part_1;
-	float4 *GC_part_2;
-	float4 *GC_part_3;
-	float2 *GC_part_4;
-
-	float chi_square_squared_radius;
-
-	float max_t;
-	float max_R;
-	float *distances;
-	int *gauss_indices;
-};
-
-// *************************************************************************************************
-
 extern "C" __constant__ LaunchParams optixLaunchParams;
 
 // *************************************************************************************************
@@ -48,16 +22,7 @@ extern "C" __global__ void __raygen__renderFrame() {
 	int x = optixGetLaunchIndex().x;
 	int y = optixGetLaunchIndex().y;
 
-	REAL3_R d = make_REAL3_R(
-		(((REAL_R)-0.5) + ((x + ((REAL_R)0.5)) / optixLaunchParams.width)) * optixLaunchParams.double_tan_half_fov_x,
-		(((REAL_R)-0.5) + ((y + ((REAL_R)0.5)) / optixLaunchParams.height)) * optixLaunchParams.double_tan_half_fov_y,
-		1
-	);
-	REAL3_R v = make_REAL3_R(
-		MAD_R(optixLaunchParams.R.x, d.x, MAD_R(optixLaunchParams.D.x, d.y, optixLaunchParams.F.x * d.z)),
-		MAD_R(optixLaunchParams.R.y, d.x, MAD_R(optixLaunchParams.D.y, d.y, optixLaunchParams.F.y * d.z)),
-		MAD_R(optixLaunchParams.R.z, d.x, MAD_R(optixLaunchParams.D.z, d.y, optixLaunchParams.F.z * d.z))
-	);
+	REAL3_R v = make_REAL3_R(1.0f, 0.0f, 0.0f);
 
 	// *** *** *** *** ***
 
@@ -69,20 +34,13 @@ extern "C" __global__ void __raygen__renderFrame() {
 
 	// *** *** *** *** ***
 
-	for (int i = 0; i < NUMBER_OF_SAMPLES; ++i) {
-		float t = ((i + 0.5f) / NUMBER_OF_SAMPLES) * optixLaunchParams.max_t;
-		float3 O_prim = make_float3(
-			optixLaunchParams.O.x + (v.x * t),
-			optixLaunchParams.O.y + (v.y * t),
-			optixLaunchParams.O.z + (v.z * t)
-		);
-
+	for (int i = 0; i < optixLaunchParams.batch_size; ++i) {
 		rp.neighbors_num = 0;
 		rp.max_dist_so_far = -INFINITY;
 
 		optixTrace(
 			optixLaunchParams.traversable,
-			O_prim,
+			optixLaunchParams.coords[i],
 			v,
 			0.0f,
 			INFINITY,

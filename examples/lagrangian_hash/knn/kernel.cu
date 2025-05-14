@@ -55,32 +55,6 @@ struct SbtRecord {
 
 // *************************************************************************************************
 
-struct LaunchParams {
-	unsigned width;
-	unsigned height;
-
-	float3 O;
-	float3 R, D, F;
-	float double_tan_half_fov_x;
-	float double_tan_half_fov_y;
-
-	OptixTraversableHandle traversable;
-
-	float4 *GC_part_1;
-	float4 *GC_part_2;
-	float4 *GC_part_3;
-	float2 *GC_part_4;
-
-	float chi_square_squared_radius;
-
-	float max_t;
-	float max_R;
-	float *distances;
-	int *gauss_indices;
-};
-
-// *************************************************************************************************
-
 static void LoadFromFile(const char *fPath, int epochNum, const char *fExtension, void *buf, int size) {
 	FILE *f;
 
@@ -116,42 +90,10 @@ __global__ void UpdateGaussiansPoligonsVertices(SOptiXRenderParams params_OptiX)
 		
 		float4 GC_2 = params_OptiX.GC_part_2_1[Gauss_ind];
 		float4 GC_3 = params_OptiX.GC_part_3_1[Gauss_ind];
-		// float2 GC_4 = params_OptiX.GC_part_4_1[Gauss_ind];
-
-		// float aa = GC_3.z * GC_3.z;
-		// float bb = GC_3.w * GC_3.w;
-		// float cc = GC_4.x * GC_4.x;
-		// float dd = GC_4.y * GC_4.y;
-		// float s = 2.0f / (aa + bb + cc + dd);
-
-		// float bs = GC_3.w * s;  float cs = GC_4.x * s;  float ds = GC_4.y * s;
-		// float ab = GC_3.z * bs; float ac = GC_3.z * cs; float ad = GC_3.z * ds;
-		// bb = bb * s;			float bc = GC_3.w * cs; float bd = GC_3.w * ds;
-		// cc = cc * s;			float cd = GC_4.x * ds;       dd = dd * s;
 		
 		float sX = expf(GC_2.w);
 		float sY = expf(GC_3.x);
 		float sZ = expf(GC_3.y);
-
-		// v2
-		// float Q11 = 1.0f - cc - dd;
-		// float Q12 = bc - ad;
-		// float Q13 = bd + ac;
-
-		// float Q21 = bc + ad;
-		// float Q22 = 1.0f - bb - dd;
-		// float Q23 = cd - ab;
-
-		// float Q31 = bd - ac;
-		// float Q32 = cd + ab;
-		// float Q33 = 1.0f - bb - cc;
-
-		/*float3 vertex2D = params_OptiX.Gaussian_as_polygon_vertices[tid % NUMBER_OF_VERTICES];
-		params_OptiX.Gaussians_as_polygon_vertices[tid] = make_float3(
-			GC_2.x + (Q11 * sX * vertex2D.x) + (Q12 * sY * vertex2D.y) + (Q13 * sZ * vertex2D.z),
-			GC_2.y + (Q21 * sX * vertex2D.x) + (Q22 * sY * vertex2D.y) + (Q23 * sZ * vertex2D.z),
-			GC_2.z + (Q31 * sX * vertex2D.x) + (Q32 * sY * vertex2D.y) + (Q33 * sZ * vertex2D.z)
-		);*/
 
 		// KNN
 		float maxS = fmaxf(sX, fmaxf(sY, sZ));
@@ -649,50 +591,16 @@ extern "C" bool InitializeOptiXRenderer(
 	float fB = SortableUint2Float(auxiliary_values_local.scene_upper_bound.z); // !!! !!! !!!
 
 	float max_t = -INFINITY;
-	float dot;
-	float3 vertex;
-
-	vertex = make_float3(lB, uB, bB);
-	dot = (params_OptiX.F.x * (vertex.x - params_OptiX.O.x)) + (params_OptiX.F.y * (vertex.y - params_OptiX.O.y)) + (params_OptiX.F.z * (vertex.z - params_OptiX.O.z));
-	if (dot > max_t) max_t = dot;
-
-	vertex = make_float3(rB, uB, bB);
-	dot = (params_OptiX.F.x * (vertex.x - params_OptiX.O.x)) + (params_OptiX.F.y * (vertex.y - params_OptiX.O.y)) + (params_OptiX.F.z * (vertex.z - params_OptiX.O.z));
-	if (dot > max_t) max_t = dot;
-
-	vertex = make_float3(lB, uB, fB);
-	dot = (params_OptiX.F.x * (vertex.x - params_OptiX.O.x)) + (params_OptiX.F.y * (vertex.y - params_OptiX.O.y)) + (params_OptiX.F.z * (vertex.z - params_OptiX.O.z));
-	if (dot > max_t) max_t = dot;
-
-	vertex = make_float3(rB, uB, fB);
-	dot = (params_OptiX.F.x * (vertex.x - params_OptiX.O.x)) + (params_OptiX.F.y * (vertex.y - params_OptiX.O.y)) + (params_OptiX.F.z * (vertex.z - params_OptiX.O.z));
-	if (dot > max_t) max_t = dot;
-
-	vertex = make_float3(lB, dB, bB);
-	dot = (params_OptiX.F.x * (vertex.x - params_OptiX.O.x)) + (params_OptiX.F.y * (vertex.y - params_OptiX.O.y)) + (params_OptiX.F.z * (vertex.z - params_OptiX.O.z));
-	if (dot > max_t) max_t = dot;
-
-	vertex = make_float3(rB, dB, bB);
-	dot = (params_OptiX.F.x * (vertex.x - params_OptiX.O.x)) + (params_OptiX.F.y * (vertex.y - params_OptiX.O.y)) + (params_OptiX.F.z * (vertex.z - params_OptiX.O.z));
-	if (dot > max_t) max_t = dot;
-
-	vertex = make_float3(lB, dB, fB);
-	dot = (params_OptiX.F.x * (vertex.x - params_OptiX.O.x)) + (params_OptiX.F.y * (vertex.y - params_OptiX.O.y)) + (params_OptiX.F.z * (vertex.z - params_OptiX.O.z));
-	if (dot > max_t) max_t = dot;
-
-	vertex = make_float3(rB, dB, fB);
-	dot = (params_OptiX.F.x * (vertex.x - params_OptiX.O.x)) + (params_OptiX.F.y * (vertex.y - params_OptiX.O.y)) + (params_OptiX.F.z * (vertex.z - params_OptiX.O.z));
-	if (dot > max_t) max_t = dot;
 
 	params_OptiX.max_t = max_t;
 	params_OptiX.max_R = max_R;
 
-	params_OptiX.distances_host = (float *)malloc(sizeof(float) * NUMBER_OF_SAMPLES);
-	params_OptiX.gauss_indices_host = (int *)malloc(sizeof(int) * NUMBER_OF_SAMPLES);
+	params_OptiX.distances_host = (float *)malloc(sizeof(float) * params_OptiX.batch_size);
+	params_OptiX.gauss_indices_host = (int *)malloc(sizeof(int) * params_OptiX.batch_size);
 
-	error_CUDA = cudaMalloc(&params_OptiX.distances, sizeof(float) * NUMBER_OF_SAMPLES);
+	error_CUDA = cudaMalloc(&params_OptiX.distances, sizeof(float) * params_OptiX.batch_size);
 	if (error_CUDA != cudaSuccess) return false;
-	error_CUDA = cudaMalloc(&params_OptiX.gauss_indices, sizeof(int) * NUMBER_OF_SAMPLES);
+	error_CUDA = cudaMalloc(&params_OptiX.gauss_indices, sizeof(int) * params_OptiX.batch_size);
 	if (error_CUDA != cudaSuccess) return false;
 
 	// *** *** *** *** ***
@@ -911,9 +819,6 @@ extern "C" bool InitializeOptiXRenderer(
 
 	params_OptiX.width = params.w; // !!! !!! !!!
 	params_OptiX.height = params.h; // !!! !!! !!!
-	params_OptiX.double_tan_half_fov_x = params.double_tan_half_fov_x; // !!! !!! !!!
-	params_OptiX.double_tan_half_fov_y = params.double_tan_half_fov_y; // !!! !!! !!!
-
 
 	// *********************************************************************************************
 
@@ -933,23 +838,19 @@ extern "C" bool RenderOptiX(SOptiXRenderParams& params_OptiX) {
 	LaunchParams launchParams;
 	launchParams.width = params_OptiX.width;
 	launchParams.height = params_OptiX.height;
-	launchParams.O = params_OptiX.O;
-	launchParams.R = params_OptiX.R;
-	launchParams.D = params_OptiX.D;
-	launchParams.F = params_OptiX.F;
-	launchParams.double_tan_half_fov_x = params_OptiX.double_tan_half_fov_x;
-	launchParams.double_tan_half_fov_y = params_OptiX.double_tan_half_fov_y;
 	launchParams.traversable = params_OptiX.asHandle;
 	launchParams.GC_part_1 = params_OptiX.GC_part_1_1;
 	launchParams.GC_part_2 = params_OptiX.GC_part_2_1;
 	launchParams.GC_part_3 = params_OptiX.GC_part_3_1;
 	launchParams.GC_part_4 = params_OptiX.GC_part_4_1;
-	launchParams.chi_square_squared_radius = chi_square_squared_radius_host; // !!! !!! !!!
+	launchParams.chi_square_squared_radius = chi_square_squared_radius_host;
 	// KNN
 	launchParams.max_t = params_OptiX.max_t;
 	launchParams.max_R = params_OptiX.max_R;
 	launchParams.distances = params_OptiX.distances;
 	launchParams.gauss_indices = params_OptiX.gauss_indices;
+	launchParams.coords = params_OptiX.coords;
+	launchParams.batch_size = params_OptiX.batch_size;
 
 	void *launchParamsBuffer;
 	error_CUDA = cudaMalloc(&launchParamsBuffer, sizeof(LaunchParams) * 1);
@@ -977,7 +878,7 @@ extern "C" bool RenderOptiX(SOptiXRenderParams& params_OptiX) {
 	error_CUDA = cudaMemcpy(
 		params_OptiX.distances_host,
 		params_OptiX.distances,
-		sizeof(float) * NUMBER_OF_SAMPLES,
+		sizeof(float) * params_OptiX.batch_size,
 		cudaMemcpyDeviceToHost
 	);
 	if (error_CUDA != cudaSuccess) return false;
@@ -985,14 +886,14 @@ extern "C" bool RenderOptiX(SOptiXRenderParams& params_OptiX) {
 	error_CUDA = cudaMemcpy(
 		params_OptiX.gauss_indices_host,
 		params_OptiX.gauss_indices,
-		sizeof(int) * NUMBER_OF_SAMPLES,
+		sizeof(int) * params_OptiX.batch_size,
 		cudaMemcpyDeviceToHost
 	);
 
 	return true;
 }
 
-extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians, float* distances, int* gauss_indices) {
+extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians, float3* coords, int batchSize, float* distances, int* gaussIndices) {
 
 	SRenderParams params;
 	params.GC = GC;
@@ -1011,10 +912,12 @@ extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians, float* distan
 	
 	SOptiXRenderParams params_OptiX;
 
-	params_OptiX.O = make_float3(0.0f, 0.0f, 0.0f);
-	params_OptiX.F = make_float3(0.0f, 0.0f, -1.0f);
-	params_OptiX.R = make_float3(1.0f, 0.0f, 0.0f);
-	params_OptiX.D = make_float3(0.0f, 1.0f, 0.0f);
+	float3* d_coords;
+	cudaMalloc(&d_coords, sizeof(float3) * batchSize);
+	cudaMemcpy(d_coords, coords, sizeof(float3) * batchSize, cudaMemcpyHostToDevice);
+
+	params_OptiX.coords = d_coords;
+	params_OptiX.batch_size = batchSize;
 
 	bool success = InitializeOptiXRenderer(params, params_OptiX, false, 0);
 	printf("OptiX Renderer initialized: %s\n", success ? "true" : "false");
@@ -1023,8 +926,11 @@ extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians, float* distan
 	printf("OptiX Rendered: %s\n", success ? "true" : "false");
 	
 	// Copy data into memory provided by Python
-	for (int i = 0; i < NUMBER_OF_SAMPLES; ++i) {
+	for (int i = 0; i < params_OptiX.batch_size; ++i) {
 		distances[i] = params_OptiX.distances_host[i];
-		gauss_indices[i] = params_OptiX.gauss_indices_host[i];
+		gaussIndices[i] = params_OptiX.gauss_indices_host[i];
 	}
+
+	cudaFree(d_coords);
+
 }
