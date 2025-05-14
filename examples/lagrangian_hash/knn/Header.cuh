@@ -213,4 +213,6 @@ struct SOptiXRenderParams {
 	float max_R;
 	float *distances;
 	float *distances_host;
+	int *gauss_indices;
+	int *gauss_indices_host;
 };

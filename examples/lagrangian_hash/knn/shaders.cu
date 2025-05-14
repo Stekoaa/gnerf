@@ -25,6 +25,7 @@ struct LaunchParams {
 	float max_t;
 	float max_R;
 	float *distances;
+	int *gauss_indices;
 };
 
 // *************************************************************************************************
@@ -37,6 +38,7 @@ struct SRayPayload {
 	// KNN
 	float min_distance;
 	float dist_array[1024];
+	int gauss_ind[1024];
 	int neighbors_num;
 	float max_dist_so_far;
 };
@@ -97,25 +99,35 @@ extern "C" __global__ void __raygen__renderFrame() {
 
 		for (int j = 1; j < rp.neighbors_num; ++j) {
 			float dist1 = rp.dist_array[j];
-			
+			float ind1  = rp.gauss_ind[j];
+
 			int k;
 			for (k = j; k > 0; --k) {
 				float dist2 = rp.dist_array[k - 1];
-				
-				if (dist1 < dist2)
+
+				if (dist1 < dist2) {
 					rp.dist_array[k] = dist2;
-				else
+					rp.gauss_ind[k] = rp.gauss_ind[k - 1];
+				} else {
 					break;
+				}
 			}
-			if (k < j)
+
+			if (k < j) {
 				rp.dist_array[k] = dist1;
+				rp.gauss_ind[k] = ind1;
+			}
 		}
 
-		if ((x == 400) && (y == 400)) {
-			if (rp.neighbors_num >= 1)
+		if ((x == 10) && (y == 10)) {
+			if (rp.neighbors_num >= 1){
 				optixLaunchParams.distances[i] = rp.dist_array[0];
-			else
+				optixLaunchParams.gauss_indices[i] = rp.gauss_ind[0];
+			}
+			else{
 				optixLaunchParams.distances[i] = INFINITY;
+				optixLaunchParams.gauss_indices[i] = -1;
+			}
 		}
 	}
 }
@@ -150,11 +162,13 @@ extern "C" __global__ void __anyhit__radiance() {
 			if (distance > rp->max_dist_so_far)
 				rp->max_dist_so_far = distance;
 			rp->dist_array[rp->neighbors_num] = distance;
+			rp->gauss_ind[rp->neighbors_num] = (float)Gauss_ind;
 			++rp->neighbors_num;
 		} else {
 			if (distance < rp->max_dist_so_far) {
 				if (rp->neighbors_num < 1024) {
 					rp->dist_array[rp->neighbors_num] = distance;
+					rp->gauss_ind[rp->neighbors_num] = (float)Gauss_ind;
 					++rp->neighbors_num;
 				}
 			}

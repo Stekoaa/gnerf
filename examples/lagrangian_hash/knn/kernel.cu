@@ -76,6 +76,7 @@ struct LaunchParams {
 	float max_t;
 	float max_R;
 	float *distances;
+	int *gauss_indices;
 };
 
 // *************************************************************************************************
@@ -687,8 +688,11 @@ extern "C" bool InitializeOptiXRenderer(
 	params_OptiX.max_R = max_R;
 
 	params_OptiX.distances_host = (float *)malloc(sizeof(float) * NUMBER_OF_SAMPLES);
+	params_OptiX.gauss_indices_host = (int *)malloc(sizeof(int) * NUMBER_OF_SAMPLES);
 
 	error_CUDA = cudaMalloc(&params_OptiX.distances, sizeof(float) * NUMBER_OF_SAMPLES);
+	if (error_CUDA != cudaSuccess) return false;
+	error_CUDA = cudaMalloc(&params_OptiX.gauss_indices, sizeof(int) * NUMBER_OF_SAMPLES);
 	if (error_CUDA != cudaSuccess) return false;
 
 	// *** *** *** *** ***
@@ -945,6 +949,7 @@ extern "C" bool RenderOptiX(SOptiXRenderParams& params_OptiX) {
 	launchParams.max_t = params_OptiX.max_t;
 	launchParams.max_R = params_OptiX.max_R;
 	launchParams.distances = params_OptiX.distances;
+	launchParams.gauss_indices = params_OptiX.gauss_indices;
 
 	void *launchParamsBuffer;
 	error_CUDA = cudaMalloc(&launchParamsBuffer, sizeof(LaunchParams) * 1);
@@ -977,6 +982,13 @@ extern "C" bool RenderOptiX(SOptiXRenderParams& params_OptiX) {
 	);
 	if (error_CUDA != cudaSuccess) return false;
 
+	error_CUDA = cudaMemcpy(
+		params_OptiX.gauss_indices_host,
+		params_OptiX.gauss_indices,
+		sizeof(int) * NUMBER_OF_SAMPLES,
+		cudaMemcpyDeviceToHost
+	);
+
 	return true;
 }
 
@@ -985,8 +997,8 @@ extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians) {
 	SRenderParams params;
 	params.GC = GC;
 	params.numberOfGaussians = numberOfGaussians;
-	params.w = 800;
-	params.h = 800;
+	params.w = 20;
+	params.h = 20;
 	params.double_tan_half_fov_x = 1.0f;
 	params.double_tan_half_fov_y = 1.0f;
 
@@ -1013,6 +1025,7 @@ extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians) {
 	// Assuming params_OptiX.distances_host is a pointer to the distances array on the host
 	for (int i = 0; i < NUMBER_OF_SAMPLES; i++) {
 		float distance = params_OptiX.distances_host[i];
-		printf("Distance %d: %f\n", i, distance);
+		int gauss_index = params_OptiX.gauss_indices_host[i];
+		printf("Distance %d: %f, Gauss Index: %d\n", i, distance, gauss_index);
 	}
 }

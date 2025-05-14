@@ -23,7 +23,7 @@ class SGaussianComponent(ctypes.Structure):
 
 def random_spherical_gaussian():
     # Generate random spherical coordinates
-    r = random.random()
+    r = random.random() * 10
     theta = math.acos(random.uniform(-1, 1))
     phi = random.uniform(0, 2 * math.pi)
     
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     # Define constants
     NUMBER_OF_GAUSSIANS = 1000
 
-    # Create an array of 100 SGaussianComponent structs
+    # Create an array of SGaussianComponent structs
     GC_Array = SGaussianComponent * NUMBER_OF_GAUSSIANS
     GC = GC_Array()
 
