@@ -55,19 +55,6 @@ struct SbtRecord {
 
 // *************************************************************************************************
 
-static void LoadFromFile(const char *fPath, int epochNum, const char *fExtension, void *buf, int size) {
-	FILE *f;
-
-	char fName[256];
-	sprintf(fName, "%s/%d.%s", fPath, epochNum, fExtension);
-
-	f = fopen(fName, "rb");
-	fread(buf, size, 1, f);
-	fclose(f);
-}
-
-// *************************************************************************************************
-
 unsigned Float2SortableUint(float value) {
 	unsigned tmp = *((unsigned *)&value);
 	return tmp ^ ((tmp >= 0x80000000) ? 0xFFFFFFFF : 0x80000000);
@@ -129,7 +116,6 @@ __global__ void UpdateGaussiansPoligonsIndices(SOptiXRenderParams params_OptiX) 
 extern "C" bool InitializeOptiXRenderer(
 	SRenderParams &params,
 	SOptiXRenderParams &params_OptiX,
-	bool loadFromFile = false,
 	int epoch = 0
 ) {
 	cudaError_t error_CUDA;
@@ -350,37 +336,15 @@ extern "C" bool InitializeOptiXRenderer(
 
 	// *********************************************************************************************
 
-	if (!loadFromFile) {
-		params_OptiX.numberOfGaussians = params.numberOfGaussians; // !!! !!! !!!
-		if ((epoch + 1 <= densification_end_epoch_host) && (params_OptiX.numberOfGaussians <= max_Gaussians_per_model_host)) { // !!! !!! !!!
-			params_OptiX.scatterBufferSize = 1; // !!! !!! !!!
-			params_OptiX.maxNumberOfGaussians1 = params_OptiX.numberOfGaussians * 1.125f; // !!! !!! !!!
-			params_OptiX.maxNumberOfGaussians = params_OptiX.numberOfGaussians * REALLOC_MULTIPLIER2; // !!! !!! !!!
-		} else {
-			params_OptiX.scatterBufferSize = 1; // !!! !!! !!!
-			params_OptiX.maxNumberOfGaussians1 = params_OptiX.numberOfGaussians; // !!! !!! !!!
-			params_OptiX.maxNumberOfGaussians = params_OptiX.numberOfGaussians;
-		}
+	params_OptiX.numberOfGaussians = params.numberOfGaussians; // !!! !!! !!!
+	if ((epoch + 1 <= densification_end_epoch_host) && (params_OptiX.numberOfGaussians <= max_Gaussians_per_model_host)) { // !!! !!! !!!
+		params_OptiX.scatterBufferSize = 1; // !!! !!! !!!
+		params_OptiX.maxNumberOfGaussians1 = params_OptiX.numberOfGaussians * 1.125f; // !!! !!! !!!
+		params_OptiX.maxNumberOfGaussians = params_OptiX.numberOfGaussians * REALLOC_MULTIPLIER2; // !!! !!! !!!
 	} else {
-		FILE *f;
-
-		char fName[256];
-		sprintf(fName, "dump/save/%d.GC1", epoch);
-
-		f = fopen(fName, "rb");
-		fseek(f, 0, SEEK_END);
-		params_OptiX.numberOfGaussians = ftell(f) / sizeof(float4); // !!! !!! !!!
-		fclose(f);
-
-		if ((epoch + 1 <= densification_end_epoch_host) && (params_OptiX.numberOfGaussians <= max_Gaussians_per_model_host)) { // !!! !!! !!!
-			params_OptiX.scatterBufferSize = 1; // !!! !!! !!!
-			params_OptiX.maxNumberOfGaussians1 = params_OptiX.numberOfGaussians * 1.125f; // !!! !!! !!!
-			params_OptiX.maxNumberOfGaussians = params_OptiX.numberOfGaussians * REALLOC_MULTIPLIER2; // !!! !!! !!!
-		} else {
-			params_OptiX.scatterBufferSize = 1; // !!! !!! !!!
-			params_OptiX.maxNumberOfGaussians1 = params_OptiX.numberOfGaussians; // !!! !!! !!!
-			params_OptiX.maxNumberOfGaussians = params_OptiX.numberOfGaussians;
-		}
+		params_OptiX.scatterBufferSize = 1; // !!! !!! !!!
+		params_OptiX.maxNumberOfGaussians1 = params_OptiX.numberOfGaussians; // !!! !!! !!!
+		params_OptiX.maxNumberOfGaussians = params_OptiX.numberOfGaussians;
 	}
 
 	// *********************************************************************************************
@@ -390,45 +354,22 @@ extern "C" bool InitializeOptiXRenderer(
 	float4 *GC_part_3 = (float4 *)malloc(sizeof(float4) * params_OptiX.numberOfGaussians);
 	float2 *GC_part_4 = (float2 *)malloc(sizeof(float2) * params_OptiX.numberOfGaussians);
 
-	if (!loadFromFile) {
-		for (int i = 0; i < params_OptiX.numberOfGaussians; ++i) {
-			GC_part_2[i].x = params.GC[i].mX;
-			GC_part_2[i].y = params.GC[i].mY;
-			GC_part_2[i].z = params.GC[i].mZ;
-			GC_part_2[i].w = params.GC[i].sX;
+	for (int i = 0; i < params_OptiX.numberOfGaussians; ++i) {
+		GC_part_2[i].x = params.GC[i].mX;
+		GC_part_2[i].y = params.GC[i].mY;
+		GC_part_2[i].z = params.GC[i].mZ;
+		GC_part_2[i].w = params.GC[i].sX;
 
-			GC_part_3[i].x = params.GC[i].sY;
-			GC_part_3[i].y = params.GC[i].sZ;
-			GC_part_3[i].z = params.GC[i].qr;
-			GC_part_3[i].w = params.GC[i].qi;
+		GC_part_3[i].x = params.GC[i].sY;
+		GC_part_3[i].y = params.GC[i].sZ;
+		GC_part_3[i].z = params.GC[i].qr;
+		GC_part_3[i].w = params.GC[i].qi;
 
-			GC_part_4[i].x = params.GC[i].qj;
-			GC_part_4[i].y = params.GC[i].qk;
-		}
-	} else {
-		LoadFromFile("dump/save", epoch, "GC1", GC_part_1, sizeof(float4) * params_OptiX.numberOfGaussians);
-		LoadFromFile("dump/save", epoch, "GC2", GC_part_2, sizeof(float4) * params_OptiX.numberOfGaussians);
-		LoadFromFile("dump/save", epoch, "GC3", GC_part_3, sizeof(float4) * params_OptiX.numberOfGaussians);
-		LoadFromFile("dump/save", epoch, "GC4", GC_part_4, sizeof(float2) * params_OptiX.numberOfGaussians);
+		GC_part_4[i].x = params.GC[i].qj;
+		GC_part_4[i].y = params.GC[i].qk;
 	}
 
 	// *********************************************************************************************
-
-	// !!! !!! !!! TRIANGLES !!! !!! !!!
-	// Polygon
-	/*float3 *Gaussian_as_polygon_vertices = (float3 *)malloc(sizeof(float3) * 1 * NUMBER_OF_VERTICES);
-	int3 *Gaussian_as_polygon_indices = (int3 *)malloc(sizeof(int3) * 1 * NUMBER_OF_FACES);
-	
-	for (int i = 0; i < NUMBER_OF_VERTICES; ++i)
-		Gaussian_as_polygon_vertices[i] = make_float3(
-			0.0f,
-			cosf(i * ((2.0f * M_PI) / NUMBER_OF_VERTICES)) * sqrtf(chi_square_squared_radius_host),
-			sinf(i * ((2.0f * M_PI) / NUMBER_OF_VERTICES)) * sqrtf(chi_square_squared_radius_host)
-		);
-	for (int i = 0; i < NUMBER_OF_FACES; ++i)
-		Gaussian_as_polygon_indices[i] = make_int3(0, i + 1, i + 2);*/
-
-	// *** *** *** *** ***
 
 	// Icosahedron
 	float3 *Gaussian_as_polygon_vertices = (float3 *)malloc(sizeof(float3) * 1 * 12);
@@ -919,7 +860,7 @@ extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians, float3* coord
 	params_OptiX.coords = d_coords;
 	params_OptiX.batch_size = batchSize;
 
-	bool success = InitializeOptiXRenderer(params, params_OptiX, false, 0);
+	bool success = InitializeOptiXRenderer(params, params_OptiX, 0);
 	printf("OptiX Renderer initialized: %s\n", success ? "true" : "false");
 
 	success = RenderOptiX(params_OptiX);
