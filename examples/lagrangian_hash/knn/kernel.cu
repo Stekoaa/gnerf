@@ -12,15 +12,6 @@
 
 // *************************************************************************************************
 
-// !!! !!! !!! EXPERIMENTAL !!! !!! !!!
-struct AABB { float a; float b; float c; float d; float e; float f; };
-int *needsToBeRemoved_host;
-__device__ int *needsToBeRemoved;
-int *scatterBuffer;
-// !!! !!! !!! EXPERIMENTAL !!! !!! !!!
-
-// *************************************************************************************************
-
 struct SAuxiliaryValues {
 	uint3 scene_lower_bound = make_uint3(0xFF800000, 0xFF800000, 0xFF800000);
 	uint3 scene_upper_bound = make_uint3(0x007FFFFF, 0x007FFFFF, 0x007FFFFF);
@@ -35,17 +26,8 @@ __constant__ float scene_extent;
 
 // *************************************************************************************************
 
-int densification_end_epoch_host;
-float min_s_coefficients_clipping_threshold_host;
-float max_s_coefficients_clipping_threshold_host;
 float chi_square_squared_radius_host; 
-int max_Gaussians_per_model_host;
-
-__constant__ int densification_end_epoch;
-__constant__ float min_s_coefficients_clipping_threshold;
-__constant__ float max_s_coefficients_clipping_threshold;
 __constant__ float chi_square_squared_radius; 
-__constant__ int max_Gaussians_per_model;
 
 // *************************************************************************************************
 
@@ -232,12 +214,6 @@ extern "C" bool InitializeOptiXRenderer(
 
 	OptixProgramGroupDesc pgDesc_hitgroup = {};
 	pgDesc_hitgroup.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-	/*//pgDesc_hitgroup.hitgroup.moduleAH            = module; // !!! !!! !!!
-	//pgDesc_hitgroup.hitgroup.entryFunctionNameAH = "__anyhit__radiance"; // !!! !!! !!!
-	pgDesc_hitgroup.hitgroup.moduleCH            = module;           
-	pgDesc_hitgroup.hitgroup.entryFunctionNameCH = "__closesthit__radiance";
-	pgDesc_hitgroup.hitgroup.moduleIS            = module;
-	pgDesc_hitgroup.hitgroup.entryFunctionNameIS = "__intersection__is";*/
 	
 	// !!! !!! !!! TRIANGLES !!! !!! !!!
 	pgDesc_hitgroup.hitgroup.moduleCH            = module;           
@@ -336,16 +312,7 @@ extern "C" bool InitializeOptiXRenderer(
 
 	// *********************************************************************************************
 
-	params_OptiX.numberOfGaussians = params.numberOfGaussians; // !!! !!! !!!
-	if ((epoch + 1 <= densification_end_epoch_host) && (params_OptiX.numberOfGaussians <= max_Gaussians_per_model_host)) { // !!! !!! !!!
-		params_OptiX.scatterBufferSize = 1; // !!! !!! !!!
-		params_OptiX.maxNumberOfGaussians1 = params_OptiX.numberOfGaussians * 1.125f; // !!! !!! !!!
-		params_OptiX.maxNumberOfGaussians = params_OptiX.numberOfGaussians * REALLOC_MULTIPLIER2; // !!! !!! !!!
-	} else {
-		params_OptiX.scatterBufferSize = 1; // !!! !!! !!!
-		params_OptiX.maxNumberOfGaussians1 = params_OptiX.numberOfGaussians; // !!! !!! !!!
-		params_OptiX.maxNumberOfGaussians = params_OptiX.numberOfGaussians;
-	}
+	params_OptiX.numberOfGaussians = params.numberOfGaussians;
 
 	// *********************************************************************************************
 
@@ -418,15 +385,12 @@ extern "C" bool InitializeOptiXRenderer(
 	Gaussian_as_polygon_indices[17] = make_int3(6, 2, 10);
 	Gaussian_as_polygon_indices[18] = make_int3(8, 6, 7);
 	Gaussian_as_polygon_indices[19] = make_int3(9, 8, 1);
-	// !!! !!! !!! TRIANGLES !!! !!! !!!
 
 	// *********************************************************************************************
 
 	SAuxiliaryValues auxiliary_values_local;
 	auxiliary_values_local.scene_lower_bound = initial_values.scene_lower_bound;
 	auxiliary_values_local.scene_upper_bound = initial_values.scene_upper_bound;
-
-	float scene_extent_local;
 
 	float max_R = -INFINITY;
 
@@ -453,11 +417,6 @@ extern "C" bool InitializeOptiXRenderer(
 		float Q31 = bd - ac;
 		float Q32 = cd + ab;
 		float Q33 = 1.0f - bb - cc;
-
-		// OLD INVERSE SIGMOID ACTIVATION FUNCTION FOR SCALE PARAMETERS
-		/*float sX = 1.0f / (1.0f + expf(-GC_part_2[i].w));
-		float sY = 1.0f / (1.0f + expf(-GC_part_3[i].x));
-		float sZ = 1.0f / (1.0f + expf(-GC_part_3[i].y));*/
 
 		// NEW EXPONENTIAL ACTIVATION FUNCTION FOR SCALE PARAMETERS
 		float sX = expf(GC_part_2[i].w);
@@ -544,68 +503,18 @@ extern "C" bool InitializeOptiXRenderer(
 	error_CUDA = cudaMalloc(&params_OptiX.gauss_indices, sizeof(int) * params_OptiX.coords_size);
 	if (error_CUDA != cudaSuccess) return false;
 
-	// *** *** *** *** ***
-
-	float dX = SortableUint2Float(auxiliary_values_local.scene_upper_bound.x) - SortableUint2Float(auxiliary_values_local.scene_lower_bound.x);
-	float dY = SortableUint2Float(auxiliary_values_local.scene_upper_bound.y) - SortableUint2Float(auxiliary_values_local.scene_lower_bound.y);
-	float dZ = SortableUint2Float(auxiliary_values_local.scene_upper_bound.z) - SortableUint2Float(auxiliary_values_local.scene_lower_bound.z);
-	
-	scene_extent_local = sqrtf((dX * dX) + (dY * dY) + (dZ * dZ));
-
-	
-	for (int i = 0; i < params_OptiX.numberOfGaussians; ++i) {
-		// OLD INVERSE SIGMOID ACTIVATION FUNCTION FOR SCALE PARAMETERS
-		/*float sX = 1.0f / (1.0f + expf(-GC_part_2[i].w));
-		float sY = 1.0f / (1.0f + expf(-GC_part_3[i].x));
-		float sZ = 1.0f / (1.0f + expf(-GC_part_3[i].y));*/
-
-		// NEW EXPONENTIAL ACTIVATION FUNCTION FOR SCALE PARAMETERS
-		float sX = expf(GC_part_2[i].w);
-		float sY = expf(GC_part_3[i].x);
-		float sZ = expf(GC_part_3[i].y);
-
-		sX = ((sX < scene_extent_local * min_s_coefficients_clipping_threshold_host) ? scene_extent_local * min_s_coefficients_clipping_threshold_host : sX); // !!! !!! !!!
-		sY = ((sY < scene_extent_local * min_s_coefficients_clipping_threshold_host) ? scene_extent_local * min_s_coefficients_clipping_threshold_host : sY);
-		sZ = ((sZ < scene_extent_local * min_s_coefficients_clipping_threshold_host) ? scene_extent_local * min_s_coefficients_clipping_threshold_host : sZ);
-
-		sX = ((sX > scene_extent_local * max_s_coefficients_clipping_threshold_host) ? scene_extent_local * max_s_coefficients_clipping_threshold_host : sX); // !!! !!! !!!
-		sY = ((sY > scene_extent_local * max_s_coefficients_clipping_threshold_host) ? scene_extent_local * max_s_coefficients_clipping_threshold_host : sY);
-		sZ = ((sZ > scene_extent_local * max_s_coefficients_clipping_threshold_host) ? scene_extent_local * max_s_coefficients_clipping_threshold_host : sZ);
-
-		// OLD INVERSE SIGMOID ACTIVATION FUNCTION FOR SCALE PARAMETERS
-		/*GC_part_2[i].w = -logf((1.0f / sX) - 1.0f);
-		GC_part_3[i].x = -logf((1.0f / sY) - 1.0f);
-		GC_part_3[i].y = -logf((1.0f / sZ) - 1.0f);*/
-
-		// NEW EXPONENTIAL ACTIVATION FUNCTION FOR SCALE PARAMETERS
-		GC_part_2[i].w = logf(sX);
-		GC_part_3[i].x = logf(sY);
-		GC_part_3[i].y = logf(sZ);
-	}
-
 	// *********************************************************************************************
 
-	error_CUDA = cudaMalloc(&needsToBeRemoved_host, sizeof(int) * params_OptiX.maxNumberOfGaussians);
+	error_CUDA = cudaMalloc(&params_OptiX.GC_part_1_1, sizeof(float4) * params_OptiX.numberOfGaussians);
 	if (error_CUDA != cudaSuccess) return false;
 
-	error_CUDA = cudaMemcpyToSymbol(needsToBeRemoved, &needsToBeRemoved_host, sizeof(int *));
+	error_CUDA = cudaMalloc(&params_OptiX.GC_part_2_1, sizeof(float4) * params_OptiX.numberOfGaussians);
 	if (error_CUDA != cudaSuccess) return false;
 
-	error_CUDA = cudaMalloc(&scatterBuffer, sizeof(float) * 4 * params_OptiX.scatterBufferSize);
+	error_CUDA = cudaMalloc(&params_OptiX.GC_part_3_1, sizeof(float4) * params_OptiX.numberOfGaussians);
 	if (error_CUDA != cudaSuccess) return false;
 
-	// *********************************************************************************************
-
-	error_CUDA = cudaMalloc(&params_OptiX.GC_part_1_1, sizeof(float4) * params_OptiX.maxNumberOfGaussians);
-	if (error_CUDA != cudaSuccess) return false;
-
-	error_CUDA = cudaMalloc(&params_OptiX.GC_part_2_1, sizeof(float4) * params_OptiX.maxNumberOfGaussians);
-	if (error_CUDA != cudaSuccess) return false;
-
-	error_CUDA = cudaMalloc(&params_OptiX.GC_part_3_1, sizeof(float4) * params_OptiX.maxNumberOfGaussians);
-	if (error_CUDA != cudaSuccess) return false;
-
-	error_CUDA = cudaMalloc(&params_OptiX.GC_part_4_1, sizeof(float2) * params_OptiX.maxNumberOfGaussians);
+	error_CUDA = cudaMalloc(&params_OptiX.GC_part_4_1, sizeof(float2) * params_OptiX.numberOfGaussians);
 	if (error_CUDA != cudaSuccess) return false;
 
 	error_CUDA = cudaMemcpy(params_OptiX.GC_part_1_1, GC_part_1, sizeof(float4) * params_OptiX.numberOfGaussians, cudaMemcpyHostToDevice);
@@ -639,14 +548,14 @@ extern "C" bool InitializeOptiXRenderer(
 	error_CUDA = cudaMemcpy(params_OptiX.Gaussian_as_polygon_indices, Gaussian_as_polygon_indices, sizeof(int3) * 1 * NUMBER_OF_FACES, cudaMemcpyHostToDevice);
 	if (error_CUDA != cudaSuccess) return false;
 
-	error_CUDA = cudaMalloc(&params_OptiX.Gaussians_as_polygon_vertices, sizeof(float3) * params_OptiX.maxNumberOfGaussians1 * NUMBER_OF_VERTICES); // !!! !!! !!!
+	error_CUDA = cudaMalloc(&params_OptiX.Gaussians_as_polygon_vertices, sizeof(float3) * params_OptiX.numberOfGaussians * NUMBER_OF_VERTICES); // !!! !!! !!!
 	if (error_CUDA != cudaSuccess) return false;
 
 	UpdateGaussiansPoligonsVertices<<<((params_OptiX.numberOfGaussians * NUMBER_OF_VERTICES) + 63) >> 6, 64>>>(params_OptiX);
 	error_CUDA = cudaGetLastError();
 	if (error_CUDA != cudaSuccess) return false;
 
-	error_CUDA = cudaMalloc(&params_OptiX.Gaussians_as_polygon_indices, sizeof(int3) * params_OptiX.maxNumberOfGaussians1 * NUMBER_OF_FACES); // !!! !!! !!!
+	error_CUDA = cudaMalloc(&params_OptiX.Gaussians_as_polygon_indices, sizeof(int3) * params_OptiX.numberOfGaussians * NUMBER_OF_FACES); // !!! !!! !!!
 	if (error_CUDA != cudaSuccess) return false;
 
 	UpdateGaussiansPoligonsIndices<<<((params_OptiX.numberOfGaussians * NUMBER_OF_FACES) + 63) >> 6, 64>>>(params_OptiX);
@@ -654,9 +563,6 @@ extern "C" bool InitializeOptiXRenderer(
 	if (error_CUDA != cudaSuccess) return false;
 
 	error_CUDA = cudaMemcpyToSymbol(auxiliary_values, &auxiliary_values_local, sizeof(SAuxiliaryValues) * 1);
-	if (error_CUDA != cudaSuccess) return false;
-
-	error_CUDA = cudaMemcpyToSymbol(scene_extent, &scene_extent_local, sizeof(float) * 1);
 	if (error_CUDA != cudaSuccess) return false;
 
 	free(Gaussian_as_polygon_vertices);
@@ -840,11 +746,7 @@ extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians, float3* coord
 	params.batchSize = coordsSize;
 
 	// Initialize the OptiX parameters
-	densification_end_epoch_host = 100;
-	min_s_coefficients_clipping_threshold_host = 0.01f;
-	max_s_coefficients_clipping_threshold_host = 10.0f;
 	chi_square_squared_radius_host = 0.95f;
-	max_Gaussians_per_model_host = 1024;
 	
 	SOptiXRenderParams params_OptiX;
 
