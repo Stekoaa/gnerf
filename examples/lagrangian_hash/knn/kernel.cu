@@ -536,12 +536,12 @@ extern "C" bool InitializeOptiXRenderer(
 	params_OptiX.max_t = max_t;
 	params_OptiX.max_R = max_R;
 
-	params_OptiX.distances_host = (float *)malloc(sizeof(float) * params_OptiX.batch_size);
-	params_OptiX.gauss_indices_host = (int *)malloc(sizeof(int) * params_OptiX.batch_size);
+	params_OptiX.distances_host = (float *)malloc(sizeof(float) * params_OptiX.coords_size);
+	params_OptiX.gauss_indices_host = (int *)malloc(sizeof(int) * params_OptiX.coords_size);
 
-	error_CUDA = cudaMalloc(&params_OptiX.distances, sizeof(float) * params_OptiX.batch_size);
+	error_CUDA = cudaMalloc(&params_OptiX.distances, sizeof(float) * params_OptiX.coords_size);
 	if (error_CUDA != cudaSuccess) return false;
-	error_CUDA = cudaMalloc(&params_OptiX.gauss_indices, sizeof(int) * params_OptiX.batch_size);
+	error_CUDA = cudaMalloc(&params_OptiX.gauss_indices, sizeof(int) * params_OptiX.coords_size);
 	if (error_CUDA != cudaSuccess) return false;
 
 	// *** *** *** *** ***
@@ -758,8 +758,7 @@ extern "C" bool InitializeOptiXRenderer(
 
 	// *********************************************************************************************
 
-	params_OptiX.width = params.w; // !!! !!! !!!
-	params_OptiX.height = params.h; // !!! !!! !!!
+	params_OptiX.batchSize = params.batchSize; // !!! !!! !!!
 
 	// *********************************************************************************************
 
@@ -777,8 +776,7 @@ extern "C" bool RenderOptiX(SOptiXRenderParams& params_OptiX) {
 	// *********************************************************************************************
 
 	LaunchParams launchParams;
-	launchParams.width = params_OptiX.width;
-	launchParams.height = params_OptiX.height;
+	launchParams.batch_size = params_OptiX.batchSize;
 	launchParams.traversable = params_OptiX.asHandle;
 	launchParams.GC_part_1 = params_OptiX.GC_part_1_1;
 	launchParams.GC_part_2 = params_OptiX.GC_part_2_1;
@@ -791,7 +789,7 @@ extern "C" bool RenderOptiX(SOptiXRenderParams& params_OptiX) {
 	launchParams.distances = params_OptiX.distances;
 	launchParams.gauss_indices = params_OptiX.gauss_indices;
 	launchParams.coords = params_OptiX.coords;
-	launchParams.batch_size = params_OptiX.batch_size;
+	launchParams.coords_size = params_OptiX.coords_size;
 
 	void *launchParamsBuffer;
 	error_CUDA = cudaMalloc(&launchParamsBuffer, sizeof(LaunchParams) * 1);
@@ -806,8 +804,8 @@ extern "C" bool RenderOptiX(SOptiXRenderParams& params_OptiX) {
 		(CUdeviceptr)launchParamsBuffer,
 		sizeof(LaunchParams) * 1,
 		params_OptiX.sbt,
-		params_OptiX.width,
-		params_OptiX.height,
+		params_OptiX.batchSize,
+		1,
 		1
 	);
 	if (error_OptiX != OPTIX_SUCCESS) return false;
@@ -819,7 +817,7 @@ extern "C" bool RenderOptiX(SOptiXRenderParams& params_OptiX) {
 	error_CUDA = cudaMemcpy(
 		params_OptiX.distances_host,
 		params_OptiX.distances,
-		sizeof(float) * params_OptiX.batch_size,
+		sizeof(float) * params_OptiX.coords_size,
 		cudaMemcpyDeviceToHost
 	);
 	if (error_CUDA != cudaSuccess) return false;
@@ -827,22 +825,19 @@ extern "C" bool RenderOptiX(SOptiXRenderParams& params_OptiX) {
 	error_CUDA = cudaMemcpy(
 		params_OptiX.gauss_indices_host,
 		params_OptiX.gauss_indices,
-		sizeof(int) * params_OptiX.batch_size,
+		sizeof(int) * params_OptiX.coords_size,
 		cudaMemcpyDeviceToHost
 	);
 
 	return true;
 }
 
-extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians, float3* coords, int batchSize, float* distances, int* gaussIndices) {
+extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians, float3* coords, int coordsSize, float* distances, int* gaussIndices) {
 
 	SRenderParams params;
 	params.GC = GC;
 	params.numberOfGaussians = numberOfGaussians;
-	params.w = 20;
-	params.h = 20;
-	params.double_tan_half_fov_x = 1.0f;
-	params.double_tan_half_fov_y = 1.0f;
+	params.batchSize = coordsSize;
 
 	// Initialize the OptiX parameters
 	densification_end_epoch_host = 100;
@@ -854,11 +849,11 @@ extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians, float3* coord
 	SOptiXRenderParams params_OptiX;
 
 	float3* d_coords;
-	cudaMalloc(&d_coords, sizeof(float3) * batchSize);
-	cudaMemcpy(d_coords, coords, sizeof(float3) * batchSize, cudaMemcpyHostToDevice);
+	cudaMalloc(&d_coords, sizeof(float3) * coordsSize);
+	cudaMemcpy(d_coords, coords, sizeof(float3) * coordsSize, cudaMemcpyHostToDevice);
 
 	params_OptiX.coords = d_coords;
-	params_OptiX.batch_size = batchSize;
+	params_OptiX.coords_size = coordsSize;
 
 	bool success = InitializeOptiXRenderer(params, params_OptiX, 0);
 	printf("OptiX Renderer initialized: %s\n", success ? "true" : "false");
@@ -867,7 +862,7 @@ extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians, float3* coord
 	printf("OptiX Rendered: %s\n", success ? "true" : "false");
 	
 	// Copy data into memory provided by Python
-	for (int i = 0; i < params_OptiX.batch_size; ++i) {
+	for (int i = 0; i < params_OptiX.coords_size; ++i) {
 		distances[i] = params_OptiX.distances_host[i];
 		gaussIndices[i] = params_OptiX.gauss_indices_host[i];
 	}

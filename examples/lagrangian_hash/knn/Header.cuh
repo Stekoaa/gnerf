@@ -114,9 +114,7 @@ struct SGaussianComponent {
 // *** *** *** *** ***
 
 struct SRenderParams {
-	float double_tan_half_fov_x;
-	float double_tan_half_fov_y;
-	int w; int h;
+	int batchSize;
 	SGaussianComponent* GC;
 	int numberOfGaussians;
 	int epoch;
@@ -125,8 +123,7 @@ struct SRenderParams {
 // *************************************************************************************************
 
 struct LaunchParams {
-	unsigned width;
-	unsigned height;
+	unsigned batch_size;
 
 	OptixTraversableHandle traversable;
 
@@ -143,7 +140,7 @@ struct LaunchParams {
 	int *gauss_indices;
 
 	float3 *coords;
-	int batch_size;
+	int coords_size;
 };
 
 // *************************************************************************************************
@@ -174,8 +171,7 @@ struct SOptiXRenderParams {
 
 	OptixTraversableHandle asHandle;
 
-	unsigned width;
-	unsigned height;
+	unsigned batchSize;
 
 	float4 *GC_part_1_1, *GC_part_1_2;
 	float4 *GC_part_2_1, *GC_part_2_2;
@@ -234,5 +230,5 @@ struct SOptiXRenderParams {
 	int *gauss_indices_host;
 
 	float3 *coords;
-	int batch_size;
+	int coords_size;
 };

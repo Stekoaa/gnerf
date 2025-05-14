@@ -95,6 +95,6 @@ if __name__ == "__main__":
     )
 
     # Print some results
-    print("First 10 distances and gauss_indices:")
+    print("First distances and gauss_indices:")
     for i in range(100):
         print(f"Distance {i}: {distances[i]}, Gauss Index: {gauss_indices[i]}")
