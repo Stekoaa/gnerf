@@ -61,7 +61,7 @@ if __name__ == "__main__":
     print("qr:", GC[0].qr, "qi:", GC[0].qi, "qj:", GC[0].qj, "qk:", GC[0].qk)
 
     # Load the shared library
-    lib_knn = ctypes.CDLL('/workspace/otk-pyoptix/knn/lib_kernel.so')
+    lib_knn = ctypes.CDLL('/workspace/gnerf/examples/lagrangian_hash/knn/lib_kernel.so')
 
     # Call function
     lib_knn.fit(ctypes.byref(GC), NUMBER_OF_GAUSSIANS)

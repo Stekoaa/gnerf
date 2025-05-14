@@ -22,7 +22,6 @@
 const int NUMBER_OF_VERTICES = 12;
 const int NUMBER_OF_FACES = 20;
 
-const double REALLOC_MULTIPLIER1 = 1.5;
 const double REALLOC_MULTIPLIER2 = 1.51;
 
 const int NUMBER_OF_SAMPLES = 128;

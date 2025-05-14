@@ -1,5 +1,5 @@
 Optix Compile:
-nvcc -ptx -arch=sm_86 -o shaders.cu.ptx shaders.cu -I/workspace/otk-pyoptix/NVIDIA-OptiX-SDK-7.6.0-linux64-x86_64/include -I/usr/local/cuda/include
+nvcc -ptx -arch=sm_86 -o shaders.cu.ptx shaders.cu -I/workspace/gnerf/NVIDIA-OptiX-SDK-7.6.0-linux64-x86_64/include -I/usr/local/cuda/include
 
 Cuda Compile:
-nvcc -Xcompiler -fPIC -shared kernel.cu -o lib_kernel.so --gpu-architecture=compute_86 --gpu-code=sm_86 -I/workspace/otk-pyoptix/NVIDIA-OptiX-SDK-7.6.0-linux64-x86_64/include -I/usr/local/cuda/include -lcuda -lcufft
+nvcc -Xcompiler -fPIC -shared kernel.cu -o lib_kernel.so --gpu-architecture=compute_86 --gpu-code=sm_86 -I/workspace/gnerf/NVIDIA-OptiX-SDK-7.6.0-linux64-x86_64/include -I/usr/local/cuda/include -lcuda -lcufft

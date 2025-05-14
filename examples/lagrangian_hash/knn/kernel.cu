@@ -208,7 +208,7 @@ extern "C" bool InitializeOptiXRenderer(
 
 	// *********************************************************************************************
 
-	FILE *f = fopen("/workspace/otk-pyoptix/knn/shaders.cu.ptx", "rb");
+	FILE *f = fopen("/workspace/gnerf/examples/lagrangian_hash/knn/shaders.cu.ptx", "rb");
 	fseek(f, 0, SEEK_END);
 	int ptxCodeSize = ftell(f);
 	fclose(f);
@@ -217,7 +217,7 @@ extern "C" bool InitializeOptiXRenderer(
 	char *buffer = (char *)malloc(sizeof(char) * (ptxCodeSize + 1));
 	ptxCode[0] = 0; // !!! !!! !!!
 
-	f = fopen("/workspace/otk-pyoptix/knn/shaders.cu.ptx", "rb");
+	f = fopen("/workspace/gnerf/examples/lagrangian_hash/knn/shaders.cu.ptx", "rb");
 	fgets(buffer, ptxCodeSize + 1, f);
 	while (!feof(f)) {
 		ptxCode = strcat(ptxCode, buffer);
@@ -826,7 +826,7 @@ extern "C" bool InitializeOptiXRenderer(
 	aabb_input.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
 
 	int input_tri_flags[1] = {OPTIX_GEOMETRY_FLAG_REQUIRE_SINGLE_ANYHIT_CALL};
-	aabb_input.triangleArray.flags         = (const unsigned int *)input_tri_flags;
+	aabb_input.triangleArray.flags = (const unsigned int *)input_tri_flags;
 	aabb_input.triangleArray.numSbtRecords = 1;
 	// !!! !!! !!! TRIANGLES !!! !!! !!!
 	
@@ -986,7 +986,7 @@ extern "C" void fit(SGaussianComponent* GC, int numberOfGaussians) {
 	params.GC = GC;
 	params.numberOfGaussians = numberOfGaussians;
 	params.w = 800;
-	params.h = 600;
+	params.h = 800;
 	params.double_tan_half_fov_x = 1.0f;
 	params.double_tan_half_fov_y = 1.0f;
 
