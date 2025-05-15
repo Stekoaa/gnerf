@@ -12,20 +12,6 @@
 
 // *************************************************************************************************
 
-struct SAuxiliaryValues {
-	uint3 scene_lower_bound = make_uint3(0xFF800000, 0xFF800000, 0xFF800000);
-	uint3 scene_upper_bound = make_uint3(0x007FFFFF, 0x007FFFFF, 0x007FFFFF);
-} initial_values;
-
-__device__ struct {
-	uint3 scene_lower_bound;
-	uint3 scene_upper_bound;
-} auxiliary_values;
-
-__constant__ float scene_extent;
-
-// *************************************************************************************************
-
 float chi_square_squared_radius_host; 
 __constant__ float chi_square_squared_radius; 
 
@@ -34,20 +20,6 @@ __constant__ float chi_square_squared_radius;
 struct SbtRecord {
 	__align__(OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
 };
-
-// *************************************************************************************************
-
-unsigned Float2SortableUint(float value) {
-	unsigned tmp = *((unsigned *)&value);
-	return tmp ^ ((tmp >= 0x80000000) ? 0xFFFFFFFF : 0x80000000);
-}
-
-// *************************************************************************************************
-
-float SortableUint2Float(unsigned value) {
-	unsigned tmp = value ^ ((value < 0x80000000) ? 0xFFFFFFFF : 0x80000000);
-	return *((float *)&tmp);
-}
 
 // *************************************************************************************************
 
@@ -388,10 +360,6 @@ extern "C" bool InitializeOptiXRenderer(
 
 	// *********************************************************************************************
 
-	SAuxiliaryValues auxiliary_values_local;
-	auxiliary_values_local.scene_lower_bound = initial_values.scene_lower_bound;
-	auxiliary_values_local.scene_upper_bound = initial_values.scene_upper_bound;
-
 	float max_R = -INFINITY;
 
 	for (int i = 0; i < params_OptiX.numberOfGaussians; ++i) {
@@ -430,66 +398,11 @@ extern "C" bool InitializeOptiXRenderer(
 		if (sZ > R) R = sZ;
 		R = R * sqrtf(chi_square_squared_radius_host);
 		if (R > max_R) max_R = R;
-
-		// v2
-		float tmpX = sqrtf(chi_square_squared_radius_host * ((sX * sX * Q11 * Q11) + (sY * sY * Q12 * Q12) + (sZ * sZ * Q13 * Q13)));
-		float tmpY = sqrtf(chi_square_squared_radius_host * ((sX * sX * Q21 * Q21) + (sY * sY * Q22 * Q22) + (sZ * sZ * Q23 * Q23)));
-		float tmpZ = sqrtf(chi_square_squared_radius_host * ((sX * sX * Q31 * Q31) + (sY * sY * Q32 * Q32) + (sZ * sZ * Q33 * Q33)));
-
-		float lB = GC_part_2[i].x - tmpX; // !!! !!! !!!
-		float rB = GC_part_2[i].x + tmpX; // !!! !!! !!!
-
-		float uB = GC_part_2[i].y - tmpY; // !!! !!! !!!
-		float dB = GC_part_2[i].y + tmpY; // !!! !!! !!!
-
-		float bB = GC_part_2[i].z - tmpZ; // !!! !!! !!!
-		float fB = GC_part_2[i].z + tmpZ; // !!! !!! !!!
-
-		auxiliary_values_local.scene_lower_bound.x = (
-			(Float2SortableUint(lB) < auxiliary_values_local.scene_lower_bound.x) ?
-			Float2SortableUint(lB) :
-			auxiliary_values_local.scene_lower_bound.x
-		);
-		auxiliary_values_local.scene_lower_bound.y = (
-			(Float2SortableUint(uB) < auxiliary_values_local.scene_lower_bound.y) ?
-			Float2SortableUint(uB) :
-			auxiliary_values_local.scene_lower_bound.y
-		);
-		auxiliary_values_local.scene_lower_bound.z = (
-			(Float2SortableUint(bB) < auxiliary_values_local.scene_lower_bound.z) ?
-			Float2SortableUint(bB) :
-			auxiliary_values_local.scene_lower_bound.z
-		);
-	
-		auxiliary_values_local.scene_upper_bound.x = (
-			(Float2SortableUint(rB) > auxiliary_values_local.scene_upper_bound.x) ?
-			Float2SortableUint(rB) :
-			auxiliary_values_local.scene_upper_bound.x
-		);
-		auxiliary_values_local.scene_upper_bound.y = (
-			(Float2SortableUint(dB) > auxiliary_values_local.scene_upper_bound.y) ?
-			Float2SortableUint(dB) :
-			auxiliary_values_local.scene_upper_bound.y
-		);
-		auxiliary_values_local.scene_upper_bound.z = (
-			(Float2SortableUint(fB) > auxiliary_values_local.scene_upper_bound.z) ?
-			Float2SortableUint(fB) :
-			auxiliary_values_local.scene_upper_bound.z
-		);
 	}
 
 	// *** *** *** *** ***
 
 	// KNN
-	float lB = SortableUint2Float(auxiliary_values_local.scene_lower_bound.x); // !!! !!! !!!
-	float rB = SortableUint2Float(auxiliary_values_local.scene_upper_bound.x); // !!! !!! !!!
-
-	float uB = SortableUint2Float(auxiliary_values_local.scene_lower_bound.y); // !!! !!! !!!
-	float dB = SortableUint2Float(auxiliary_values_local.scene_upper_bound.y); // !!! !!! !!!
-
-	float bB = SortableUint2Float(auxiliary_values_local.scene_lower_bound.z); // !!! !!! !!!
-	float fB = SortableUint2Float(auxiliary_values_local.scene_upper_bound.z); // !!! !!! !!!
-
 	float max_t = -INFINITY;
 
 	params_OptiX.max_t = max_t;
@@ -560,9 +473,6 @@ extern "C" bool InitializeOptiXRenderer(
 
 	UpdateGaussiansPoligonsIndices<<<((params_OptiX.numberOfGaussians * NUMBER_OF_FACES) + 63) >> 6, 64>>>(params_OptiX);
 	error_CUDA = cudaGetLastError();
-	if (error_CUDA != cudaSuccess) return false;
-
-	error_CUDA = cudaMemcpyToSymbol(auxiliary_values, &auxiliary_values_local, sizeof(SAuxiliaryValues) * 1);
 	if (error_CUDA != cudaSuccess) return false;
 
 	free(Gaussian_as_polygon_vertices);

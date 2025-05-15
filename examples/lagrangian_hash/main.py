@@ -3,6 +3,8 @@ import numpy as np
 import random
 import math
 import ctypes
+import time
+import torch
 
 
 class SGaussianComponent(ctypes.Structure):
@@ -49,11 +51,28 @@ def random_spherical_gaussian():
     return component
 
 
+def get_nearest_gausses_indicies(coords, means, batch_size=1000, n_neighbours=10):
+
+    n_coords = coords.shape[0]
+    
+    nearest_indices = torch.empty((n_coords, n_neighbours), device=coords.device, dtype=int)
+    
+    start_time = time.time()
+    for i in range(0, n_coords, batch_size):
+        batch_coords = coords[i:i+batch_size]
+        distances = torch.cdist(batch_coords, means).to(device='cuda')
+        _, batch_nearest_indices = torch.topk(distances, n_neighbours, largest=False, sorted=False)
+        nearest_indices[i:i+batch_size] = batch_nearest_indices
+    print(f"KNN: {time.time() - start_time:.4f} seconds")
+    
+    return nearest_indices
+
+
 if __name__ == "__main__":
 
     # Define constants
-    NUMBER_OF_GAUSSIANS = 1000
-    NUMBER_OF_POINTS = 1000
+    NUMBER_OF_GAUSSIANS = 40000
+    NUMBER_OF_POINTS = 495759 # 2097152
 
     # Create an array of SGaussianComponent structs
     GC_Array = SGaussianComponent * NUMBER_OF_GAUSSIANS
@@ -84,6 +103,21 @@ if __name__ == "__main__":
     distances = (ctypes.c_float * NUMBER_OF_POINTS)()
     gauss_indices = (ctypes.c_int * NUMBER_OF_POINTS)()
 
+    # Find the closest gaussian center to coords[0]
+    min_dist = float('inf')
+    min_idx = -1
+    x0, y0, z0 = coords[0].x, coords[0].y, coords[0].z
+    for i in range(NUMBER_OF_GAUSSIANS):
+        dx = GC[i].mX - x0
+        dy = GC[i].mY - y0
+        dz = GC[i].mZ - z0
+        dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+        if dist < min_dist:
+            min_dist = dist
+            min_idx = i
+    print(f"Closest gaussian to coords[0] is at index {min_idx} with distance {min_dist}")
+
+    start_time = time.time()
     # Call function
     lib_knn.fit(
         ctypes.byref(GC),
@@ -93,8 +127,33 @@ if __name__ == "__main__":
         ctypes.byref(distances),
         ctypes.byref(gauss_indices)
     )
+    end_time = time.time()
+    print(f"Execution time for nearest neighbor loop: {end_time - start_time:.4f} seconds")
 
     # Print some results
     print("First distances and gauss_indices:")
-    for i in range(100):
+    for i in range(10):
         print(f"Distance {i}: {distances[i]}, Gauss Index: {gauss_indices[i]}")
+    print("...")
+    for i in range(NUMBER_OF_POINTS - 10, NUMBER_OF_POINTS):
+        print(f"Distance {i}: {distances[i]}, Gauss Index: {gauss_indices[i]}")
+
+    # Old method
+    coords = torch.tensor([[coords[i].x, coords[i].y, coords[i].z] for i in range(NUMBER_OF_POINTS)], device='cuda')
+    means = torch.tensor([[GC[i].mX, GC[i].mY, GC[i].mZ] for i in range(NUMBER_OF_GAUSSIANS)], device='cuda')
+    nearest_indices = get_nearest_gausses_indicies(coords, means, batch_size=20000, n_neighbours=1)
+
+    # Print some results
+    print("First distances and gauss_indices:")
+    for i in range(10):
+        print(f"Gauss Index: {nearest_indices[i].item()}")
+    print("...")
+    for i in range(NUMBER_OF_POINTS - 10, NUMBER_OF_POINTS):
+        print(f"Gauss Index: {nearest_indices[i].item()}")
+
+    # Check percentage of matches
+    matches = 0
+    for i in range(NUMBER_OF_POINTS):
+        if gauss_indices[i] == nearest_indices[i].item():
+            matches += 1
+    print(f"Percentage of matches: {matches / NUMBER_OF_POINTS * 100:.2f}%")
