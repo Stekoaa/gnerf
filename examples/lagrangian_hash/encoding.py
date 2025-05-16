@@ -2,12 +2,16 @@ from typing import List
 import math
 import logging
 import numpy as np
+import faiss
+import faiss.contrib.torch_utils
 
 import torch
 import torch.nn as nn
 
-import laghash.ops.grid as grid_ops
-from examples.utils.general_utils import append_sys_path
+# import laghash.ops.grid as grid_ops
+from utils.general_utils import append_sys_path
+import time
+import torch.autograd.profiler as profiler
 
 append_sys_path()
 
@@ -184,17 +188,24 @@ class SplashEncoding(nn.Module):
     #     feats = feats.reshape(*output_shape, feats.shape[-1])
     #     return feats, gmm
 
-    def _get_nearest_gausses_indicies(self, coords):
-        batch_size = 1000
+    def _get_nearest_gausses_indicies(self, coords, batch_size=1000):
+
         n_coords = coords.shape[0]
+
+        # print(f"coords shape: {coords.shape}")
+        # print(f"means shape: {self.means.shape}")
         
         nearest_indices = torch.empty((n_coords, self.n_neighbours), device=coords.device, dtype=int)
         
+        start_time = time.time()
         for i in range(0, n_coords, batch_size):
             batch_coords = coords[i:i+batch_size]
             distances = torch.cdist(batch_coords, self.means).to(device='cuda')
             _, batch_nearest_indices = torch.topk(distances, self.n_neighbours, largest=False, sorted=False)
             nearest_indices[i:i+batch_size] = batch_nearest_indices
+
+        torch.cuda.synchronize()
+        print(f"KNN: {time.time() - start_time:.4f} seconds")
         
         return nearest_indices
 
@@ -212,6 +223,71 @@ class SplashEncoding(nn.Module):
     #     # Step 4: Sum weighted features across Gaussians
     #     feature_vector = torch.sum(weighted_features, dim=1)  # [num_coords, feature_dim]
     #     return feature_vector
+
+    def get_nearest_gaussians_indices_faiss(self, coords):
+        """
+        FAISS KNN using full GPU path and torch.cuda.FloatTensor inputs.
+
+        Parameters:
+        - coords: (N, D) torch.cuda.FloatTensor
+        - means: (M, D) torch.cuda.FloatTensor
+        - n_neighbors: int
+
+        Returns:
+        - indices: (N, n_neighbors) torch.LongTensor
+        """
+        assert coords.shape[1] == self.means.shape[1], "Dimension mismatch"
+        assert coords.is_cuda and self.means.is_cuda, "Inputs must be on CUDA"
+
+        N, D = coords.shape
+
+        # Create CPU index and move to GPU
+        res = faiss.StandardGpuResources()
+        gpu_index = faiss.GpuIndexFlatL2(res, D)
+
+        # Add means directly
+        gpu_index.add(torch.tensor(self.means, device=coords.device))
+
+        # Search
+        distances, nearest_indices = gpu_index.search(coords, self.n_neighbours)
+
+        return nearest_indices
+
+
+    def get_nearest_gaussians_indices_faiss_ivf(self, coords, nlist=100):
+        """
+        Efficient FAISS KNN using IVF index and optional GPU.
+
+        Parameters:
+        - coords: (N, D) torch tensor (on CPU or CUDA)
+        - means: (M, D) torch tensor (on CPU or CUDA)
+        - n_neighbors: how many nearest neighbors to find
+        - nlist: number of Voronoi cells/clusters for IVF (adjust for speed/accuracy tradeoff)
+
+        Returns:
+        - nearest_indices: (N, n_neighbors) torch tensor
+        """
+        assert coords.shape[1] == self.means.shape[1], "Dimension mismatch"
+
+        N, D = coords.shape
+        M = self.means.shape[0]
+
+        # Create IVF index
+        res = faiss.StandardGpuResources()
+        quantizer = faiss.GpuIndexFlatL2(res, D)  # the base index for coarse quantizer
+        index_ivf = faiss.GpuIndexIVFFlat(res, quantizer, D, nlist, faiss.METRIC_L2)
+
+        # Train IVF index on means
+        train_sample = self.means[:min(10000, M)]
+        index_ivf.train(train_sample)
+        index_ivf.add(torch.tensor(self.means, device=coords.device))
+
+        # Set nprobe (number of cells to search over, higher is more accurate/slower)
+        index_ivf.nprobe = min(10, nlist)
+        distances, nearest_indices = index_ivf.search(coords, self.n_neighbours)
+
+        return nearest_indices
+    
 
     def _calculate(self, coords, nearest_gausses_indicies, batch_size=1000):
         num_coords = coords.shape[0]
@@ -238,15 +314,21 @@ class SplashEncoding(nn.Module):
             feature_vector[i : i + batch_size] = batch_feature_vector
 
         return feature_vector
+        
 
     def forward(self, coords, lod_idx=None):
         # xd
         # feats, gmm = self.interpolate_cuda(coords)
         # is_gaussian = self.num_splashes > 0
         # gmm = gmm[:, is_gaussian]
+        batch_size = 20000
 
-        nearest_gausses_indicies = self._get_nearest_gausses_indicies(coords)
-        feats = self._calculate(coords, nearest_gausses_indicies)
+        start_time = time.time()
+        # nearest_gausses_indicies = self._get_nearest_gausses_indicies(coords, batch_size=batch_size)
+        # nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss(coords)
+        nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss_ivf(coords)
+        feats = self._calculate(coords, nearest_gausses_indicies, batch_size=batch_size)
+        print(f"Features: {time.time() - start_time:.4f} seconds")
         gmm=None
         return feats, gmm
     
