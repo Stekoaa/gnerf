@@ -25,18 +25,9 @@ log = logging.getLogger(__name__)
 class NetworkwithSplashEncoding(nn.Module):
     def __init__(
         self,
-        # xd
-        # base_resolution: int = 16,
-        # per_level_scale: int = 1.47,
-        # n_levels: int = 16,
-        # n_features_per_level: int = 2,
-        # log2_hashmap_size: int = 17,
-        num_splashes: int = 4,
         n_features_per_gauss: int = 3,
         n_neighbours: int = 5,
         n_gausses: int = 10000,  
-        splits: List[float] = [0.875, 0.9375],
-        std_init_factor: float = 1.0,
         fixed_std: bool = False,
         decay_factor: int = 1,
         output_dim: int = 3,  # The number of output tensor channels.
@@ -47,14 +38,7 @@ class NetworkwithSplashEncoding(nn.Module):
     ):
         super().__init__()
         
-        # xd
-        # self.encoding = SplashEncoding(base_resolution=base_resolution, per_level_scale=per_level_scale,
-        #                                n_levels=n_levels, n_features_per_level=n_features_per_level, 
-        #                                num_splashes=num_splashes, log2_hashmap_size=log2_hashmap_size,
-        #                                splits=splits, std_init_factor=std_init_factor, fixed_std=fixed_std, 
-        #                                decay_factor=decay_factor)
-        
-        self.encoding = SplashEncoding(std_init_factor=std_init_factor, fixed_std=fixed_std, 
+        self.encoding = SplashEncoding(fixed_std=fixed_std, 
                                        decay_factor=decay_factor, n_neighbours=n_neighbours,
                                        n_features_per_gauss=n_features_per_gauss, n_gausses=n_gausses)
         
@@ -70,10 +54,7 @@ class NetworkwithSplashEncoding(nn.Module):
                     "n_hidden_layers": net_depth,
                 },
             )
-        # self.mlp = Network(input_dim=input_dim, output_dim=output_dim, net_depth=net_depth, net_width=net_width,
-        #                    hidden_init=hidden_init, hidden_activation=hidden_activation, output_init=output_init,
-        #                    output_activation=output_activation, bias_enabled=bias_enabled, bias_init=bias_init)
-        
+
 
     def forward(self, coords):
         encoding, gmm = self.encoding(coords)

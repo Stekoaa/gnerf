@@ -81,16 +81,9 @@ class LagHashRadianceField(torch.nn.Module):
         density_activation: Callable = lambda x: trunc_exp(x - 1),
         unbounded: bool = False,
         geo_feat_dim: int = 15,
-        # xd
-        # base_resolution: int = 16,
-        # max_resolution: int = 1024,
-        # n_levels: int = 16,
-        # log2_hashmap_size: int = 17,
         n_features_per_gauss: int = 3,
         n_neighbours: int = 5,
-        num_splashes: int = 4,
         splits: List[float] = [0.875, 0.9375],
-        std_init_factor: float = 1.0,
         fixed_std: bool = False,
         decay_factor: int = 1,
         n_gausses: int = 10000,
@@ -111,20 +104,9 @@ class LagHashRadianceField(torch.nn.Module):
         self.density_activation = density_activation
         self.unbounded = unbounded
         self.geo_feat_dim = geo_feat_dim
-        # xd
-        # self.base_resolution = base_resolution
-        # self.max_resolution = max_resolution
-        # self.n_levels = n_levels
-        # self.log2_hashmap_size = log2_hashmap_size
-        self.std_init_factor = std_init_factor
         self.fixed_std = fixed_std
         self.decay_factor = decay_factor
         self.splits = splits
-
-        # xd
-        # per_level_scale = np.exp(
-        #     (np.log(max_resolution) - np.log(base_resolution)) / (n_levels - 1)
-        # ).tolist()
 
         if self.use_viewdirs:
             self.direction_encoding = tcnn.Encoding(
@@ -137,51 +119,21 @@ class LagHashRadianceField(torch.nn.Module):
                             "otype": "SphericalHarmonics",
                             "degree": 4,
                         },
-                        # {"otype": "Identity", "n_bins": 4, "degree": 4},
                     ],
                 },
             )
 
         self.mlp_base = lagrangian_hash.NetworkwithSplashEncoding(
-            # xd
-            # n_levels = n_levels,
-            # num_splashes=num_splashes,
-            # n_features_per_level = 2,
-            # log2_hashmap_size = log2_hashmap_size,
-            # splits=splits,
-            std_init_factor = std_init_factor,
             fixed_std = fixed_std,
             decay_factor=decay_factor,
             n_features_per_gauss=n_features_per_gauss,
             n_neighbours=n_neighbours,
             n_gausses=n_gausses,
-            # xd
-            # base_resolution = base_resolution,
-            # per_level_scale = per_level_scale,
             output_dim=1 + self.geo_feat_dim,
             net_depth=1,
             net_width=64,
         )
 
-        # self.mlp_base = tcnn.NetworkWithInputEncoding(
-        #     n_input_dims=num_dim,
-        #     n_output_dims=1 + self.geo_feat_dim,
-        #     encoding_config={
-        #         "otype": "HashGrid",
-        #         "n_levels": n_levels,
-        #         "n_features_per_level": 2,
-        #         "log2_hashmap_size": log2_hashmap_size,
-        #         "base_resolution": base_resolution,
-        #         "per_level_scale": per_level_scale,
-        #     },
-        #     network_config={
-        #         "otype": "FullyFusedMLP",
-        #         "activation": "ReLU",
-        #         "output_activation": "None",
-        #         "n_neurons": 64,
-        #         "n_hidden_layers": 1,
-        #     },
-        # )
         if self.geo_feat_dim > 0:
             self.mlp_head = tcnn.Network(
                 n_input_dims=(

@@ -25,10 +25,10 @@ sys.path.append(project_root)
 
 from datasets.nerf_synthetic import SubjectLoader
 from datasets.tanks_and_temples import TanksTempleDataset
-from examples.utils.general_utils import set_random_seed, TANKS_TEMPLE_SCENES, NERF_SYNTHETIC_SCENES
-from examples.utils.loss_utils import calculate_loss_warmup, calculate_lod_sigma_loss, calculate_smooth_l1_loss
-from examples.utils.metric_utils import calculate_psnr
-from examples.utils.render_utils import render_image_with_occgrid
+from utils.general_utils import set_random_seed, TANKS_TEMPLE_SCENES, NERF_SYNTHETIC_SCENES
+from utils.loss_utils import calculate_loss_warmup, calculate_lod_sigma_loss, calculate_smooth_l1_loss
+from utils.metric_utils import calculate_psnr
+from utils.render_utils import render_image_with_occgrid
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from radiance_fields.laghash import LagHashRadianceField
 
@@ -130,12 +130,8 @@ def initialize_radiance_field(cfg, estimator, device):
     radiance_field = LagHashRadianceField(
         aabb=estimator.aabbs[-1], 
         num_splashes=cfg.model.num_splashes,
-        # xd
-        # log2_hashmap_size=cfg.model.log2_hashmap_size, 
-        # max_resolution=cfg.model.max_resolution,
         n_features_per_gauss=cfg.model.n_features_per_gauss,
         n_neighbours=cfg.model.n_neighbours, 
-        std_init_factor=cfg.model.std_init_factor,
         fixed_std=cfg.model.fixed_std,
         decay_factor=std_decay_factor, 
         splits=cfg.model.splits,
@@ -345,19 +341,6 @@ def run(cfg: DictConfig):
             model_output_path = f"{output_path}/model.pth"
             torch.save(state_dict, model_output_path)
             log.info(f"Model saved to {model_output_path}")
-            
-            # xd
-            # for idx in range(radiance_field.n_levels):
-            #     means = radiance_field.mlp_base.encoding.get_means(idx)
-            #     if means is not None:
-            #         means = means.reshape(-1, means.shape[-1])
-            #         means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
-            #         if step > 0:
-            #             os.remove(os.path.join(output_path, f'means_lod{idx}@{step-cfg.trainer.save_every:05d}.ply'))
-                    
-            #         means_lod_path = os.path.join(output_path, f'means_lod{idx}@{step:05d}.ply')
-            #         means_cloud.export(means_lod_path)
-            #         log.info(f"Means saved to {means_lod_path}")
 
             means = radiance_field.mlp_base.encoding.get_means()
             means = means.reshape(-1, means.shape[-1])
@@ -368,31 +351,6 @@ def run(cfg: DictConfig):
             means_lod_path = os.path.join(output_path, f'means@{step:05d}.ply')
             means_cloud.export(means_lod_path)
             log.info(f"Means saved to {means_lod_path}")
-        
-        # if step % cfg.trainer.visualize_every == 0 and step > 0:
-        #     log.info("Starting validation")
-        #     radiance_field.eval()
-        #     estimator.eval()
-
-        #     with torch.no_grad():
-        #         data = test_dataset[0]
-        #         render_bkgd, rays, pixels = retrieve_image_data(data)
-        #         rgb, _, _, _, _, _ = render_image_with_occgrid(
-        #             radiance_field,
-        #             estimator,
-        #             rays,
-        #             # rendering options
-        #             near_plane=near_plane,
-        #             render_step_size=render_step_size,
-        #             render_bkgd=render_bkgd,
-        #             cone_angle=cone_angle,
-        #             alpha_thre=alpha_thre,
-        #         )
-        #         visualize = torch.concatenate([rgb, pixels], dim=1)
-        #         writer.add_image("visual/rgb", visualize,  step, dataformats="HWC")
-                
-        #     psnr = calculate_psnr(rgb, pixels)
-        #     log.info(f"Validation: psnr={psnr:.2f}")
 
     # evaluation
     log.info('Starting evaluation')
