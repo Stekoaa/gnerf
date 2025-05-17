@@ -17,8 +17,6 @@ class BaseDatasetConfig(InstantiateConfig):
     """Name of the dataset."""
     data_root: Path = Path("data/nerf_dataset")
     """Path to the dataset."""
-    split: Literal["train", "val", "trainval"] = "train"
-    """Split of the dataset to load."""
     scene: str = "ficus"
     """Scene name."""
     near_plane: float = 2.0

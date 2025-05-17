@@ -4,7 +4,6 @@ Copyright (c) 2022 Ruilong Li, UC Berkeley.
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 import time
@@ -38,9 +37,6 @@ from configs.base_configs import BaseDatasetConfig, BaseDataset
 
 # Disable warnings
 warnings.filterwarnings("ignore")
-
-# A logger for this file
-log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -83,6 +79,14 @@ class TrainerConfig:
     """Weight for the sigma loss."""
     weight_mip: float = 1e-3
     """Weight for the mip loss."""
+    target_sample_batch_size: int = 1 << 18
+    """Target sample batch size."""
+    render_step_size: float = 0.005
+    """Step size for rendering."""
+    cone_angle: float = 0.0
+    """Cone angle for rendering."""
+    alpha_thre: float = 0.0
+    """Alpha threshold for rendering."""
 
 @dataclass
 class ExperimentConfig(InstantiateConfig):
@@ -123,15 +127,6 @@ class ExperimentConfig(InstantiateConfig):
         config_yaml_path.write_text(yaml.dump(self), "utf8")
 
 
-
-def initialize_output(config: ExperimentConfig):
-    output_path = config.get_output_path()
-    
-    log.info(f"Saving outputs in: {output_path}")
-    os.makedirs(os.path.join(output_path, 'test'), exist_ok=True)
-    
-    return output_path
-
 def get_training_params(config: ExperimentConfig):
     scene = config.dataset.scene
     if scene in TANKS_TEMPLE_SCENES:
@@ -143,36 +138,24 @@ def get_training_params(config: ExperimentConfig):
         )
     
     return {
-        "max_steps": config.trainer.max_steps,
-        "target_sample_batch_size": 1 << 18,
         "weight_decay": weight_decay,
     }
 
-def get_dataset_and_scene_parameters(config: ExperimentConfig, device):
-    scene = config.dataset.scene
-    init_batch_size = config.dataset.init_batch_size
+# def get_dataset_and_scene_parameters(config: ExperimentConfig, device):
+#     scene = config.dataset.scene
+#     init_batch_size = config.dataset.init_batch_size
     
-    if scene in TANKS_TEMPLE_SCENES:
-        data_path = os.path.join(config.dataset.data_root, scene)
-        train_dataset = TanksTempleDataset(
-            data_path, split="train", downsample=1, is_stack=False, num_rays=init_batch_size
-        )
-        test_dataset = TanksTempleDataset(
-            data_path, split="test", downsample=1, is_stack=True, num_rays=None
-        )
-        white_bg = train_dataset.white_bg
-    else:
-        config.dataset.split = "train"
-        train_dataset: BaseDataset = config.dataset.setup(num_rays=init_batch_size, device=device)
-        config.dataset.split = "test"
-        test_dataset: BaseDataset = config.dataset.setup(num_rays=None, device=device)
-        white_bg = None
+#     if scene in TANKS_TEMPLE_SCENES:
+#         data_path = os.path.join(config.dataset.data_root, scene)
+#         train_dataset = TanksTempleDataset(
+#             data_path, split="train", downsample=1, is_stack=False, num_rays=init_batch_size
+#         )
+#     else:
+#         train_dataset: BaseDataset = config.dataset.setup(split="train", num_rays=config.dataset.init_batch_size, device=device)
 
-    return {
-        "train_dataset": train_dataset, 
-        "test_dataset": test_dataset, 
-        "white_bg": white_bg
-    }
+#     return {
+#         "train_dataset": train_dataset, 
+#     }
 
 def initialize_radiance_field(config: ExperimentConfig, estimator: OccGridEstimator, device):
     
@@ -183,7 +166,7 @@ def initialize_radiance_field(config: ExperimentConfig, estimator: OccGridEstima
         state = torch.load(config.model.load_model_path, map_location=device)
         radiance_field.load_state_dict(state['model'])
         estimator.load_state_dict(state['occupancy'])
-        log.info(f"Loaded model from {config.model.load_model_path}")
+        CONSOLE.log(f"Loaded model from {config.model.load_model_path}")
     
     return radiance_field
 
@@ -208,11 +191,11 @@ def initialize_optimizer(config, radiance_field, weight_decay):
     
     return torch.optim.Adam(params)
 
-def initialize_scheduler(config, optimizer):
+def initialize_scheduler(config: ExperimentConfig, optimizer):
     return torch.optim.lr_scheduler.ChainedScheduler(
         [
             torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, total_iters=100),
-            torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[int(m*config.trainer.max_steps) for m in config.scheduler.milestones], gamma=config.scheduler.gamma),
+            torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[int(m * config.trainer.max_steps) for m in config.scheduler.milestones], gamma=config.scheduler.gamma),
         ]
     )
 
@@ -222,48 +205,41 @@ class Experiment(nn.Module):
     def __init__(self, config: ExperimentConfig):
         self.config = config
         self.device = config.device
-        self.output_path = config.output_path
+        self.output_path = config.get_output_path()
 
     def run(self):
-        device = self.device
         set_random_seed(42)
         
-        output_path = initialize_output(self.config)
+        CONSOLE.log(f"Saving outputs in: {self.output_path}")
+        os.makedirs(os.path.join(self.output_path, 'test'), exist_ok=True)
         self.config.save_config()
 
         if self.config.dataset.scene in TANKS_TEMPLE_SCENES or self.config.dataset.scene in NERF_SYNTHETIC_SCENES:
             train_params = get_training_params(self.config)
-            max_steps, target_sample_batch_size, weight_decay = (
-                train_params["max_steps"],
-                train_params["target_sample_batch_size"], 
+            weight_decay = (
                 train_params["weight_decay"]
             )
 
-            dataset_params = get_dataset_and_scene_parameters(self.config, device)
-            train_dataset, test_dataset = (
-                dataset_params["train_dataset"],
-                dataset_params["test_dataset"]
-            )
+            train_dataset: BaseDataset = self.config.dataset.setup(split="train", num_rays=self.config.dataset.init_batch_size, device=self.device)
         else:
             error_message = f"Invalid scene: {self.config.dataset.scene}"
-            logging.error(error_message)
             raise ValueError(error_message)
 
-        estimator = OccGridEstimator(roi_aabb=self.config.model.aabb, resolution=self.config.model.grid_resolution, levels=self.config.model.grid_nlvl).to(device)
+        estimator = OccGridEstimator(roi_aabb=self.config.model.aabb, resolution=self.config.model.grid_resolution, levels=self.config.model.grid_nlvl).to(self.device)
 
         grad_scaler = torch.cuda.amp.GradScaler(2**10)
-        radiance_field = initialize_radiance_field(self.config, estimator, device)
+        radiance_field = initialize_radiance_field(self.config, estimator, self.device)
 
         num_params = sum(p.numel() for p in radiance_field.parameters() if p.requires_grad)
-        log.info(f"Number of parameters: {num_params/1e6:.2f}M")
+        CONSOLE.log(f"Number of parameters: {num_params/1e6:.2f}M")
         
         optimizer = initialize_optimizer(self.config, radiance_field, weight_decay)
         scheduler = initialize_scheduler(self.config, optimizer)
         
         # training
-        log.info('Starting training')
+        CONSOLE.log('Starting training')
         tic = time.time()
-        for step in tqdm(range(max_steps + 1), desc="Training"):
+        for step in tqdm(range(self.config.trainer.max_steps + 1), desc="Training"):
             radiance_field.train()
             estimator.train()
 
@@ -273,7 +249,7 @@ class Experiment(nn.Module):
 
             def occ_eval_fn(x):
                 density = radiance_field.query_density(x)
-                return density * self.config.render.render_step_size
+                return density * self.config.trainer.render_step_size
 
             # update occupancy grid
             estimator.update_every_n_steps(
@@ -289,22 +265,22 @@ class Experiment(nn.Module):
                 rays,
                 # rendering options
                 near_plane=self.config.dataset.near_plane,
-                render_step_size=self.config.render.render_step_size,
+                render_step_size=self.config.trainer.render_step_size,
                 render_bkgd=render_bkgd,
-                cone_angle=self.config.render.cone_angle,
-                alpha_thre=self.config.render.alpha_thre,
+                cone_angle=self.config.trainer.cone_angle,
+                alpha_thre=self.config.trainer.alpha_thre,
             )
 
             if n_rendering_samples == 0:
                 continue
 
-            if target_sample_batch_size > 0:
+            if self.config.trainer.target_sample_batch_size > 0:
                 # dynamic batch size for rays to keep sample batch size constant.
-                num_rays = int(len(pixels) * (target_sample_batch_size / float(n_rendering_samples)))
+                num_rays = int(len(pixels) * (self.config.trainer.target_sample_batch_size / float(n_rendering_samples)))
                 train_dataset.update_num_rays(num_rays)
 
             # compute loss
-            loss_warm_up = calculate_loss_warmup(step, max_steps)
+            loss_warm_up = calculate_loss_warmup(step, self.config.trainer.max_steps)
             mip_loss = mip_loss.mean() # distortion loss
             sigma_loss, surf_loss, i = 0, 0, 0
             
@@ -335,7 +311,7 @@ class Experiment(nn.Module):
 
             if step % self.config.trainer.log_every == 0:
                 elapsed_time = time.time() - tic
-                log.info(
+                CONSOLE.log(
                     f"Training info: "
                     f"step={step} | elapsed_time={elapsed_time:.2f}s | "
                     f"whole_loss={loss:.5f} | surf_loss={surf_loss:.5f} | " 
@@ -354,19 +330,19 @@ class Experiment(nn.Module):
                     "optimizer": optimizer.state_dict(),
                 }
                 
-                model_output_path = f"{output_path}/model.pth"
+                model_output_path = f"{self.output_path}/model.pth"
                 torch.save(state_dict, model_output_path)
-                log.info(f"Model saved to {model_output_path}")
+                CONSOLE.log(f"Model saved to {model_output_path}")
 
                 means = radiance_field.mlp_base.encoding.get_means()
                 means = means.reshape(-1, means.shape[-1])
                 means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
                 if step > 0:
-                    os.remove(os.path.join(output_path, f'means@{step-self.config.trainer.save_every:05d}.ply'))
+                    os.remove(os.path.join(self.output_path, f'means@{step-self.config.trainer.save_every:05d}.ply'))
                 
-                means_lod_path = os.path.join(output_path, f'means@{step:05d}.ply')
+                means_lod_path = os.path.join(self.output_path, f'means@{step:05d}.ply')
                 means_cloud.export(means_lod_path)
-                log.info(f"Means saved to {means_lod_path}")
+                CONSOLE.log(f"Means saved to {means_lod_path}")
 
 
 def entrypoint():

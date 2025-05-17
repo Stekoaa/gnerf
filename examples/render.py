@@ -14,7 +14,7 @@ from typing import Optional
 
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from utils.config_utils import InstantiateConfig, convert_markup_to_ansi
-from train_laghash_nerf_occ import ExperimentConfig, Experiment, OptimizerConfig, RenderConfig, SchedulerConfig, TrainerConfig
+from train_laghash_nerf_occ import ExperimentConfig, Experiment, OptimizerConfig, SchedulerConfig, TrainerConfig
 from utils.render_utils import render_image_with_occgrid, retrieve_image_data
 from utils.metric_utils import calculate_psnr
 import trimesh
@@ -29,12 +29,7 @@ class RendererConfig(InstantiateConfig):
     """Target class for the Renderer."""
     load_config: Optional[Path] = None
     """Path to the configuration file."""
-    render_step_size: float = 0.005
-    """Step size for rendering."""
-    alpha_thre: float = 0.0
-    """Alpha threshold for rendering."""
-    cone_angle: float = 0.0
-    """Cone angle for rendering."""
+
 
 class Renderer:
         
@@ -81,8 +76,7 @@ class Renderer:
         estimator.eval()
 
         # Load the dataset
-        config.dataset.split = "test"
-        test_dataset = config.dataset.setup(device=self.device)
+        test_dataset = config.dataset.setup(split="test", device=self.device)
         
         psnrs = []
         with torch.no_grad():
@@ -94,10 +88,10 @@ class Renderer:
                     rays,
                     # rendering options
                     near_plane=config.dataset.near_plane,
-                    render_step_size=self.render_config.render_step_size,
+                    render_step_size=config.trainer.render_step_size,
                     render_bkgd=render_bkgd,
-                    cone_angle=self.render_config.cone_angle,
-                    alpha_thre=self.render_config.alpha_thre,
+                    cone_angle=config.trainer.cone_angle,
+                    alpha_thre=config.trainer.alpha_thre,
                 )
                 
                 psnrs.append(calculate_psnr(rgb, pixels))

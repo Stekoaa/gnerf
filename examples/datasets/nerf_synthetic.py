@@ -66,6 +66,7 @@ class SubjectLoader(BaseDataset):
 
     def __init__(self, 
                  config: SubjectLoaderConfig,
+                 split: Literal["train", "val", "trainval"] = "train",
                  color_bkgd_aug: str = "white",
                  num_rays: int = None,
                  batch_over_images: bool = True,
@@ -74,14 +75,13 @@ class SubjectLoader(BaseDataset):
         super().__init__(config)
 
         assert color_bkgd_aug in ["white", "black", "random"]
-        self.split = self.config.split
         self.num_rays = num_rays
         self.training = (num_rays is not None) and (
-            self.config.split in ["train", "trainval"]
+            split in ["train", "trainval"]
         )
         self.color_bkgd_aug = color_bkgd_aug
         self.batch_over_images = batch_over_images
-        if self.config.split == "trainval":
+        if split == "trainval":
             _images_train, _camtoworlds_train, _focal_train = _load_renderings(
                 self.config.data_root, self.config.scene, "train"
             )
@@ -95,7 +95,7 @@ class SubjectLoader(BaseDataset):
             self.focal = _focal_train
         else:
             self.images, self.camtoworlds, self.focal = _load_renderings(
-                self.config.data_root, self.config.scene, self.config.split
+                self.config.data_root, self.config.scene, split
             )
         self.images = torch.from_numpy(self.images).to(torch.uint8)
         self.camtoworlds = torch.from_numpy(self.camtoworlds).to(torch.float32)
