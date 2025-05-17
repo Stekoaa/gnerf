@@ -16,7 +16,6 @@ import numpy as np
 import torch
 import yaml
 import trimesh
-from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from torch import nn
 
@@ -30,8 +29,7 @@ from datasets.nerf_synthetic import SubjectLoaderConfig, SubjectLoader
 from datasets.tanks_and_temples import TanksTempleDataset
 from utils.general_utils import set_random_seed, TANKS_TEMPLE_SCENES, NERF_SYNTHETIC_SCENES
 from utils.loss_utils import calculate_loss_warmup, calculate_smooth_l1_loss
-from utils.metric_utils import calculate_psnr
-from utils.render_utils import render_image_with_occgrid
+from utils.render_utils import render_image_with_occgrid, retrieve_image_data
 from utils.config_utils import InstantiateConfig, convert_markup_to_ansi, CONSOLE
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from radiance_fields.laghash import LagHashRadianceFieldConfig, LagHashRadianceField
@@ -44,15 +42,6 @@ warnings.filterwarnings("ignore")
 # A logger for this file
 log = logging.getLogger(__name__)
 
-
-@dataclass
-class RenderConfig:
-    render_step_size: float = 0.005
-    """Step size for rendering."""
-    alpha_thre: float = 0.0
-    """Alpha threshold for rendering."""
-    cone_angle: float = 0.0
-    """Cone angle for rendering."""
 
 @dataclass
 class OptimizerConfig:
@@ -104,8 +93,6 @@ class ExperimentConfig(InstantiateConfig):
     """Path to config YAML file."""
     dataset: BaseDatasetConfig = field(default_factory=SubjectLoaderConfig)
     """Dataset config."""
-    render: RenderConfig = field(default_factory=RenderConfig)
-    """Render config."""
     model: LagHashRadianceFieldConfig = field(default_factory=LagHashRadianceFieldConfig)
     """Occupancy config."""
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
@@ -143,8 +130,7 @@ def initialize_output(config: ExperimentConfig):
     log.info(f"Saving outputs in: {output_path}")
     os.makedirs(os.path.join(output_path, 'test'), exist_ok=True)
     
-    writer = SummaryWriter(output_path, purge_step=0)
-    return writer, output_path
+    return output_path
 
 def get_training_params(config: ExperimentConfig):
     scene = config.dataset.scene
@@ -177,15 +163,9 @@ def get_dataset_and_scene_parameters(config: ExperimentConfig, device):
         white_bg = train_dataset.white_bg
     else:
         config.dataset.split = "train"
-        train_dataset: BaseDataset = config.dataset.setup()
-        train_dataset.populate(
-            num_rays=init_batch_size, device=device
-        )
+        train_dataset: BaseDataset = config.dataset.setup(num_rays=init_batch_size, device=device)
         config.dataset.split = "test"
-        test_dataset: BaseDataset = config.dataset.setup()
-        test_dataset.populate(
-            num_rays=None, device=device
-        )
+        test_dataset: BaseDataset = config.dataset.setup(num_rays=None, device=device)
         white_bg = None
 
     return {
@@ -196,9 +176,8 @@ def get_dataset_and_scene_parameters(config: ExperimentConfig, device):
 
 def initialize_radiance_field(config: ExperimentConfig, estimator: OccGridEstimator, device):
     
-    radiance_field: LagHashRadianceField = config.model.setup().to(device)
     std_decay_factor = (config.trainer.std_final_factor / config.trainer.std_init_factor) ** (config.trainer.size_decay_every / config.trainer.max_steps)
-    radiance_field.populate(std_decay_factor, device=device)
+    radiance_field: LagHashRadianceField = config.model.setup(std_decay_factor=std_decay_factor, device=device).to(device)
 
     if config.model.load_model_path != "":
         state = torch.load(config.model.load_model_path, map_location=device)
@@ -237,12 +216,6 @@ def initialize_scheduler(config, optimizer):
         ]
     )
 
-def retrieve_image_data(img):
-    render_bkgd = img["color_bkgd"]
-    rays = img["rays"]
-    pixels = img["pixels"]
-    return render_bkgd, rays, pixels
-
 
 class Experiment(nn.Module):
 
@@ -255,7 +228,7 @@ class Experiment(nn.Module):
         device = self.device
         set_random_seed(42)
         
-        writer, output_path = initialize_output(self.config)
+        output_path = initialize_output(self.config)
         self.config.save_config()
 
         if self.config.dataset.scene in TANKS_TEMPLE_SCENES or self.config.dataset.scene in NERF_SYNTHETIC_SCENES:
@@ -394,40 +367,6 @@ class Experiment(nn.Module):
                 means_lod_path = os.path.join(output_path, f'means@{step:05d}.ply')
                 means_cloud.export(means_lod_path)
                 log.info(f"Means saved to {means_lod_path}")
-
-        # evaluation
-        log.info('Starting evaluation')
-        
-        radiance_field.eval()
-        estimator.eval()
-        psnrs = []
-        with torch.no_grad():
-            for i in tqdm(range(len(test_dataset)), desc='Evaluation'):
-                render_bkgd, rays, pixels = retrieve_image_data(test_dataset[i])
-                rgb, _, _, _, _, _ = render_image_with_occgrid(
-                    radiance_field,
-                    estimator,
-                    rays,
-                    # rendering options
-                    near_plane=self.config.dataset.near_plane,
-                    render_step_size=self.config.render.render_step_size,
-                    render_bkgd=render_bkgd,
-                    cone_angle=self.config.render.cone_angle,
-                    alpha_thre=self.config.render.alpha_thre,
-                )
-                
-                psnrs.append(calculate_psnr(rgb, pixels))
-                imageio.imwrite(
-                    f"{output_path}/test/rgb_test_{i}.png",
-                    (rgb.cpu().numpy() * 255).astype(np.uint8),
-                )
-
-        psnr_avg = sum(psnrs) / len(psnrs)
-        logging.info(f"Evaluation: psnr_avg={psnr_avg}")
-        with open(f"{output_path}/metrics.txt", "w") as fp:
-            fp.write(f"PSNR:{psnr_avg:.3f}")
-        writer.add_scalar("test/psnr", psnr_avg, max_steps)
-        writer.close()
 
 
 def entrypoint():

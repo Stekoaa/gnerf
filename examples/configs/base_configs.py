@@ -35,7 +35,3 @@ class BaseDataset(Dataset):
     def __init__(self, config: BaseDatasetConfig):
         super().__init__()
         self.config: BaseDatasetConfig = config
-
-    def populate(self, **kwargs):
-        """Populate the dataset with data."""
-        raise NotImplementedError("Populate method not implemented.")

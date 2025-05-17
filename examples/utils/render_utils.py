@@ -23,6 +23,14 @@ from nerfacc.volrend import (
 )
 from nerfacc.losses import distortion
 
+
+def retrieve_image_data(img):
+    render_bkgd = img["color_bkgd"]
+    rays = img["rays"]
+    pixels = img["pixels"]
+    return render_bkgd, rays, pixels
+
+
 def render_image_with_occgrid(
     # scene
     radiance_field: torch.nn.Module,

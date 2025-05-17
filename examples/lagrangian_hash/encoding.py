@@ -60,7 +60,11 @@ class SplashEncoding(nn.Module):
 
     def get_means(self):
         return self.means
+    
 
+    def set_means(self, means):
+        means = means
+        self.means = nn.Parameter(self.means)
 
     def get_stds(self):
         return self.stds

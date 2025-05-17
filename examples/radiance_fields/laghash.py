@@ -1,8 +1,6 @@
 """
 Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
-import logging
-
 from typing import Callable, List, Union
 
 import numpy as np
@@ -24,8 +22,6 @@ except ImportError as e:
         "pip install git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch"
     )
     exit()
-
-log = logging.getLogger(__name__)
 
 class _TruncExp(Function):  # pylint: disable=abstract-method
     # Implementation from torch-ngp:
@@ -102,18 +98,15 @@ class LagHashRadianceFieldConfig(InstantiateConfig):
     """Path to the model to load."""
     n_gausses: int = 40000
     """Number of Gaussians in the model."""
-    density_activation: Callable = lambda x: trunc_exp(x - 1)
-    """Activation function for density."""
 
 
 class LagHashRadianceField(torch.nn.Module):
     """Lagrangian Hashes Radiance Field"""
 
-    def __init__(self, config: LagHashRadianceFieldConfig):
+    def __init__(self, config: LagHashRadianceFieldConfig, std_decay_factor, device = "cpu"):
         self.config: LagHashRadianceFieldConfig = config
         super().__init__()
 
-    def populate(self, std_decay_factor, device = "cpu") -> None:
         if not isinstance(self.config.aabb, torch.Tensor):
             self.config.aabb = torch.tensor(self.config.aabb, dtype=torch.float32, device=device)
 
@@ -186,8 +179,9 @@ class LagHashRadianceField(torch.nn.Module):
         density_before_activation, base_mlp_out = torch.split(
             x, [1, self.config.geo_feat_dim], dim=-1
         )
+        density_activation = lambda x: trunc_exp(x - 1)
         density = (
-            self.config.density_activation(density_before_activation)
+            density_activation(density_before_activation)
             * selector[..., None]
         )
         if return_feat:

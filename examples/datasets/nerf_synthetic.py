@@ -64,16 +64,15 @@ class SubjectLoaderConfig(BaseDatasetConfig):
 class SubjectLoader(BaseDataset):
     """Single subject data loader for training and evaluation."""
 
-    def __init__(self, config: SubjectLoaderConfig):
+    def __init__(self, 
+                 config: SubjectLoaderConfig,
+                 color_bkgd_aug: str = "white",
+                 num_rays: int = None,
+                 batch_over_images: bool = True,
+                 device: torch.device = torch.device("cpu")
+                ):
         super().__init__(config)
 
-    def populate(
-        self,
-        color_bkgd_aug: str = "white",
-        num_rays: int = None,
-        batch_over_images: bool = True,
-        device: torch.device = torch.device("cpu"),
-    ):
         assert color_bkgd_aug in ["white", "black", "random"]
         self.split = self.config.split
         self.num_rays = num_rays
