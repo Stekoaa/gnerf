@@ -20,7 +20,6 @@ struct SRayPayload {
 extern "C" __global__ void __raygen__renderFrame() {
 	// KNN
 	int x = optixGetLaunchIndex().x;
-	int y = optixGetLaunchIndex().y;
 
 	REAL3_R v = make_REAL3_R(1.0f, 0.0f, 0.0f);
 

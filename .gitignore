@@ -123,7 +123,7 @@ venv.bak/
 # vscode
 .vsocde
 
-_results*/
+results*/
 _log*/
 outputs/
 data/

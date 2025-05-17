@@ -5,6 +5,8 @@ import math
 import ctypes
 import time
 import torch
+import faiss
+import faiss.contrib.torch_utils # this needs to be imported for faiss to work with torch tensors
 
 
 class SGaussianComponent(ctypes.Structure):
@@ -63,8 +65,89 @@ def get_nearest_gausses_indicies(coords, means, batch_size=1000, n_neighbours=10
         distances = torch.cdist(batch_coords, means).to(device='cuda')
         _, batch_nearest_indices = torch.topk(distances, n_neighbours, largest=False, sorted=False)
         nearest_indices[i:i+batch_size] = batch_nearest_indices
+
+    torch.cuda.synchronize()
     print(f"KNN: {time.time() - start_time:.4f} seconds")
     
+    return nearest_indices
+
+
+def get_nearest_gaussians_indices_faiss(coords, means, n_neighbors=10):
+    """
+    FAISS KNN using full GPU path and torch.cuda.FloatTensor inputs.
+
+    Parameters:
+    - coords: (N, D) torch.cuda.FloatTensor
+    - means: (M, D) torch.cuda.FloatTensor
+    - n_neighbors: int
+
+    Returns:
+    - indices: (N, n_neighbors) torch.LongTensor
+    """
+    assert coords.shape[1] == means.shape[1], "Dimension mismatch"
+    assert coords.is_cuda and means.is_cuda, "Inputs must be on CUDA"
+
+    N, D = coords.shape
+
+    # Create CPU index and move to GPU
+    res = faiss.StandardGpuResources()
+    gpu_index = faiss.GpuIndexFlatL2(res, D)
+
+    # Add means directly
+    gpu_index.add(means)
+
+    # Search
+    start = time.time()
+    distances, indices = gpu_index.search(coords, n_neighbors)
+    torch.cuda.synchronize()
+    print(f"FAISS GPU KNN: {time.time() - start:.4f} s")
+
+    return indices
+
+
+def get_nearest_gaussians_indices_faiss_ivf(coords, means, n_neighbors=10, nlist=100):
+    """
+    Efficient FAISS KNN using IVF index and optional GPU.
+
+    Parameters:
+    - coords: (N, D) torch tensor (on CPU or CUDA)
+    - means: (M, D) torch tensor (on CPU or CUDA)
+    - n_neighbors: how many nearest neighbors to find
+    - use_gpu: use FAISS GPU backend
+    - nlist: number of Voronoi cells/clusters for IVF (adjust for speed/accuracy tradeoff)
+
+    Returns:
+    - nearest_indices: (N, n_neighbors) torch tensor
+    """
+    start_time = time.time()
+
+    assert coords.shape[1] == means.shape[1], "Dimension mismatch"
+
+    N, D = coords.shape
+    M = means.shape[0]
+
+    # Create IVF index
+    res = faiss.StandardGpuResources()
+    quantizer = faiss.GpuIndexFlatL2(res, D)  # the base index for coarse quantizer
+    index_ivf = faiss.GpuIndexIVFFlat(res, quantizer, D, nlist, faiss.METRIC_L2)
+
+    # Train IVF index on means
+    print(f"Training IVF index with {min(10000, M)} vectors...")
+    train_sample = means[:min(10000, M)]
+    index_ivf.train(train_sample)
+    print(f"Adding {M} means to IVF index...")
+    index_ivf.add(means)
+
+    # Set nprobe (number of cells to search over, higher is more accurate/slower)
+    index_ivf.nprobe = min(10, nlist)
+
+    inference_start_time = time.time()
+    _, nearest_indices = index_ivf.search(coords, n_neighbors)
+    if coords.is_cuda:
+        torch.cuda.synchronize()
+    print(f"Inference FAISS IVF KNN: {time.time() - inference_start_time:.4f} seconds")
+    print(f"Whole FAISS IVF KNN: {time.time() - start_time:.4f} seconds")
+
     return nearest_indices
 
 
@@ -72,7 +155,7 @@ if __name__ == "__main__":
 
     # Define constants
     NUMBER_OF_GAUSSIANS = 40000
-    NUMBER_OF_POINTS = 495759 # 2097152
+    NUMBER_OF_POINTS = 2097152
 
     # Create an array of SGaussianComponent structs
     GC_Array = SGaussianComponent * NUMBER_OF_GAUSSIANS
@@ -103,57 +186,72 @@ if __name__ == "__main__":
     distances = (ctypes.c_float * NUMBER_OF_POINTS)()
     gauss_indices = (ctypes.c_int * NUMBER_OF_POINTS)()
 
-    # Find the closest gaussian center to coords[0]
-    min_dist = float('inf')
-    min_idx = -1
-    x0, y0, z0 = coords[0].x, coords[0].y, coords[0].z
-    for i in range(NUMBER_OF_GAUSSIANS):
-        dx = GC[i].mX - x0
-        dy = GC[i].mY - y0
-        dz = GC[i].mZ - z0
-        dist = math.sqrt(dx*dx + dy*dy + dz*dz)
-        if dist < min_dist:
-            min_dist = dist
-            min_idx = i
-    print(f"Closest gaussian to coords[0] is at index {min_idx} with distance {min_dist}")
+    n_neighbours = 50
 
-    start_time = time.time()
-    # Call function
-    lib_knn.fit(
-        ctypes.byref(GC),
-        NUMBER_OF_GAUSSIANS,
-        ctypes.byref(coords),
-        NUMBER_OF_POINTS,
-        ctypes.byref(distances),
-        ctypes.byref(gauss_indices)
-    )
-    end_time = time.time()
-    print(f"Execution time for nearest neighbor loop: {end_time - start_time:.4f} seconds")
+    # # Find the closest gaussian center to coords[0]
+    # min_dist = float('inf')
+    # min_idx = -1
+    # x0, y0, z0 = coords[0].x, coords[0].y, coords[0].z
+    # for i in range(NUMBER_OF_GAUSSIANS):
+    #     dx = GC[i].mX - x0
+    #     dy = GC[i].mY - y0
+    #     dz = GC[i].mZ - z0
+    #     dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+    #     if dist < min_dist:
+    #         min_dist = dist
+    #         min_idx = i
+    # print(f"Closest gaussian to coords[0] is at index {min_idx} with distance {min_dist}")
 
-    # Print some results
-    print("First distances and gauss_indices:")
-    for i in range(10):
-        print(f"Distance {i}: {distances[i]}, Gauss Index: {gauss_indices[i]}")
-    print("...")
-    for i in range(NUMBER_OF_POINTS - 10, NUMBER_OF_POINTS):
-        print(f"Distance {i}: {distances[i]}, Gauss Index: {gauss_indices[i]}")
+    # start_time = time.time()
+    # # Call function
+    # lib_knn.fit(
+    #     ctypes.byref(GC),
+    #     NUMBER_OF_GAUSSIANS,
+    #     ctypes.byref(coords),
+    #     NUMBER_OF_POINTS,
+    #     ctypes.byref(distances),
+    #     ctypes.byref(gauss_indices)
+    # )
+    # end_time = time.time()
+    # print(f"Execution time for nearest neighbor loop: {end_time - start_time:.4f} seconds")
 
-    # Old method
+    # # Print some results
+    # print("First distances and gauss_indices:")
+    # for i in range(10):
+    #     print(f"Distance {i}: {distances[i]}, Gauss Index: {gauss_indices[i]}")
+    # print("...")
+    # for i in range(NUMBER_OF_POINTS - 10, NUMBER_OF_POINTS):
+    #     print(f"Distance {i}: {distances[i]}, Gauss Index: {gauss_indices[i]}")
+
+    # # Old method
     coords = torch.tensor([[coords[i].x, coords[i].y, coords[i].z] for i in range(NUMBER_OF_POINTS)], device='cuda')
     means = torch.tensor([[GC[i].mX, GC[i].mY, GC[i].mZ] for i in range(NUMBER_OF_GAUSSIANS)], device='cuda')
-    nearest_indices = get_nearest_gausses_indicies(coords, means, batch_size=20000, n_neighbours=1)
+    nearest_indices = get_nearest_gausses_indicies(coords, means, batch_size=1000, n_neighbours=n_neighbours)
 
-    # Print some results
-    print("First distances and gauss_indices:")
-    for i in range(10):
-        print(f"Gauss Index: {nearest_indices[i].item()}")
-    print("...")
-    for i in range(NUMBER_OF_POINTS - 10, NUMBER_OF_POINTS):
-        print(f"Gauss Index: {nearest_indices[i].item()}")
+    # # Print some results
+    # print("First distances and gauss_indices:")
+    # for i in range(10):
+    #     print(f"Gauss Index: {nearest_indices[i].item()}")
+    # print("...")
+    # for i in range(NUMBER_OF_POINTS - 10, NUMBER_OF_POINTS):
+    #     print(f"Gauss Index: {nearest_indices[i].item()}")
 
-    # Check percentage of matches
-    matches = 0
-    for i in range(NUMBER_OF_POINTS):
-        if gauss_indices[i] == nearest_indices[i].item():
-            matches += 1
-    print(f"Percentage of matches: {matches / NUMBER_OF_POINTS * 100:.2f}%")
+    # # Check percentage of matches
+    # matches = 0
+    # for i in range(NUMBER_OF_POINTS):
+    #     if gauss_indices[i] == nearest_indices[i].item():
+    #         matches += 1
+    # print(f"Percentage of matches: {matches / NUMBER_OF_POINTS * 100:.2f}%")
+
+    get_nearest_gaussians_indices_faiss(
+        coords,
+        means,
+        n_neighbors=n_neighbours
+    )
+
+    get_nearest_gaussians_indices_faiss_ivf(
+        coords,
+        means,
+        n_neighbors=n_neighbours,
+        nlist=100
+    )

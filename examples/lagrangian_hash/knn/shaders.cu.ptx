@@ -20,7 +20,7 @@
 	.reg .b64 	%SPL;
 	.reg .pred 	%p<7>;
 	.reg .f32 	%f<14>;
-	.reg .b32 	%r<98>;
+	.reg .b32 	%r<95>;
 	.reg .b64 	%rd<32>;
 
 
@@ -31,14 +31,14 @@
 	// begin inline asm
 	call (%r9), _optix_get_launch_index_x, ();
 	// end inline asm
-	cvt.u32.u64 	%r54, %rd6;
+	cvt.u32.u64 	%r51, %rd6;
 	shr.u64 	%rd7, %rd6, 32;
-	cvt.u32.u64 	%r55, %rd7;
+	cvt.u32.u64 	%r52, %rd7;
 	add.s64 	%rd2, %rd1, 8196;
-	mov.u32 	%r85, 0;
-	st.local.u32 	[%rd1+8196], %r85;
-	mov.u32 	%r86, -8388608;
-	st.local.u32 	[%rd1+8200], %r86;
+	mov.u32 	%r82, 0;
+	st.local.u32 	[%rd1+8196], %r82;
+	mov.u32 	%r83, -8388608;
+	st.local.u32 	[%rd1+8200], %r83;
 	ld.const.u64 	%rd5, [optixLaunchParams+8];
 	ld.const.u64 	%rd8, [optixLaunchParams+80];
 	cvta.to.global.u64 	%rd9, %rd8;
@@ -51,27 +51,27 @@
 	mov.f32 	%f7, 0f3F800000;
 	mov.f32 	%f11, 0f7F800000;
 	mov.f32 	%f12, 0f00000000;
-	mov.u32 	%r48, 255;
-	mov.u32 	%r49, 40;
-	mov.u32 	%r94, 1;
-	mov.u32 	%r53, 2;
+	mov.u32 	%r45, 255;
+	mov.u32 	%r46, 40;
+	mov.u32 	%r91, 1;
+	mov.u32 	%r50, 2;
 	// begin inline asm
-	call(%r15,%r16,%r17,%r18,%r19,%r20,%r21,%r22,%r23,%r24,%r25,%r26,%r27,%r28,%r29,%r30,%r31,%r32,%r33,%r34,%r35,%r36,%r37,%r38,%r39,%r40,%r41,%r42,%r43,%r44,%r45,%r46),_optix_trace_typed_32,(%r85,%rd5,%f4,%f5,%f6,%f7,%f12,%f12,%f12,%f11,%f12,%r48,%r49,%r85,%r94,%r85,%r53,%r54,%r55,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85,%r85);
+	call(%r12,%r13,%r14,%r15,%r16,%r17,%r18,%r19,%r20,%r21,%r22,%r23,%r24,%r25,%r26,%r27,%r28,%r29,%r30,%r31,%r32,%r33,%r34,%r35,%r36,%r37,%r38,%r39,%r40,%r41,%r42,%r43),_optix_trace_typed_32,(%r82,%rd5,%f4,%f5,%f6,%f7,%f12,%f12,%f12,%f11,%f12,%r45,%r46,%r82,%r91,%r82,%r50,%r51,%r52,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82,%r82);
 	// end inline asm
-	ld.local.u32 	%r97, [%rd1+8196];
-	setp.lt.s32 	%p1, %r97, 2;
+	ld.local.u32 	%r94, [%rd1+8196];
+	setp.lt.s32 	%p1, %r94, 2;
 	@%p1 bra 	$L__BB0_7;
 
 $L__BB0_1:
-	mul.wide.s32 	%rd12, %r94, 4;
+	mul.wide.s32 	%rd12, %r91, 4;
 	add.s64 	%rd13, %rd1, %rd12;
 	ld.local.f32 	%f1, [%rd13+4];
-	ld.local.u32 	%r88, [%rd13+4100];
-	cvt.rn.f32.s32 	%f2, %r88;
-	mov.u32 	%r96, %r94;
+	ld.local.u32 	%r85, [%rd13+4100];
+	cvt.rn.f32.s32 	%f2, %r85;
+	mov.u32 	%r93, %r91;
 
 $L__BB0_2:
-	add.s32 	%r4, %r96, -1;
+	add.s32 	%r4, %r93, -1;
 	mul.wide.s32 	%rd14, %r4, 4;
 	add.s64 	%rd15, %rd1, %rd14;
 	add.s64 	%rd4, %rd15, 4;
@@ -80,30 +80,30 @@ $L__BB0_2:
 	@%p2 bra 	$L__BB0_4;
 
 	st.local.f32 	[%rd4+4], %f3;
-	ld.local.u32 	%r89, [%rd4+4096];
-	st.local.u32 	[%rd4+4100], %r89;
-	setp.gt.s32 	%p3, %r96, 1;
-	mov.u32 	%r96, %r4;
+	ld.local.u32 	%r86, [%rd4+4096];
+	st.local.u32 	[%rd4+4100], %r86;
+	setp.gt.s32 	%p3, %r93, 1;
+	mov.u32 	%r93, %r4;
 	@%p3 bra 	$L__BB0_2;
 
 $L__BB0_4:
-	setp.ge.s32 	%p4, %r96, %r94;
+	setp.ge.s32 	%p4, %r93, %r91;
 	@%p4 bra 	$L__BB0_6;
 
-	mul.wide.s32 	%rd16, %r96, 4;
+	mul.wide.s32 	%rd16, %r93, 4;
 	add.s64 	%rd17, %rd1, %rd16;
 	st.local.f32 	[%rd17+4], %f1;
-	cvt.rzi.s32.f32 	%r90, %f2;
-	st.local.u32 	[%rd17+4100], %r90;
+	cvt.rzi.s32.f32 	%r87, %f2;
+	st.local.u32 	[%rd17+4100], %r87;
 
 $L__BB0_6:
-	add.s32 	%r94, %r94, 1;
-	ld.local.u32 	%r97, [%rd2];
-	setp.lt.s32 	%p5, %r94, %r97;
+	add.s32 	%r91, %r91, 1;
+	ld.local.u32 	%r94, [%rd2];
+	setp.lt.s32 	%p5, %r91, %r94;
 	@%p5 bra 	$L__BB0_1;
 
 $L__BB0_7:
-	setp.gt.s32 	%p6, %r97, 0;
+	setp.gt.s32 	%p6, %r94, 0;
 	@%p6 bra 	$L__BB0_9;
 	bra.uni 	$L__BB0_8;
 
@@ -114,11 +114,11 @@ $L__BB0_9:
 	shl.b64 	%rd27, %rd3, 2;
 	add.s64 	%rd28, %rd26, %rd27;
 	st.global.f32 	[%rd28], %f13;
-	ld.local.u32 	%r93, [%rd2+-4096];
+	ld.local.u32 	%r90, [%rd2+-4096];
 	ld.const.u64 	%rd29, [optixLaunchParams+72];
 	cvta.to.global.u64 	%rd30, %rd29;
 	add.s64 	%rd31, %rd30, %rd27;
-	st.global.u32 	[%rd31], %r93;
+	st.global.u32 	[%rd31], %r90;
 	bra.uni 	$L__BB0_10;
 
 $L__BB0_8:
@@ -126,13 +126,13 @@ $L__BB0_8:
 	cvta.to.global.u64 	%rd19, %rd18;
 	shl.b64 	%rd20, %rd3, 2;
 	add.s64 	%rd21, %rd19, %rd20;
-	mov.u32 	%r91, 2139095040;
-	st.global.u32 	[%rd21], %r91;
+	mov.u32 	%r88, 2139095040;
+	st.global.u32 	[%rd21], %r88;
 	ld.const.u64 	%rd22, [optixLaunchParams+72];
 	cvta.to.global.u64 	%rd23, %rd22;
 	add.s64 	%rd24, %rd23, %rd20;
-	mov.u32 	%r92, -1;
-	st.global.u32 	[%rd24], %r92;
+	mov.u32 	%r89, -1;
+	st.global.u32 	[%rd24], %r89;
 
 $L__BB0_10:
 	ret;
