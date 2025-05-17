@@ -9,6 +9,9 @@ import numpy as np
 import torch
 from torch.autograd import Function
 from torch.cuda.amp import custom_bwd, custom_fwd
+from utils.config_utils import InstantiateConfig
+from dataclasses import dataclass, field
+from typing import Type
 
 import lagrangian_hash
 
@@ -68,49 +71,63 @@ def contract_to_unisphere(
         x[mask] = (2 - 1 / mag[mask]) * (x[mask] / mag[mask])
         x = x / 4 + 0.5  # [-inf, inf] is at [0, 1]
         return x
+    
+
+@dataclass 
+class LagHashRadianceFieldConfig(InstantiateConfig):
+
+    _target: Type = field(default_factory=lambda: LagHashRadianceField)
+    """Configuration for the LagHashRadianceField."""
+    aabb: list = field(default_factory=lambda: [-1.5, -1.5, -1.5, 1.5, 1.5, 1.5])
+    """Axis-Aligned Bounding Box (AABB) of the scene."""
+    num_dim: int = 3
+    """Number of dimensions for the input coordinates."""
+    geo_feat_dim: int = 15
+    """Number of dimensions for the geometry features."""
+    grid_resolution: int = 128
+    """Resolution of the occupancy grid."""
+    grid_nlvl: int = 1
+    """Number of levels in the occupancy grid."""
+    unbounded: bool = False
+    """Whether to use unbounded coordinates."""
+    use_viewdirs: bool = True
+    """Whether to use view directions."""
+    n_neighbours: int = 16
+    """Number of neighbours for the hashmap."""
+    n_features_per_gauss: int = 10
+    """Number of features per Gaussian."""
+    fixed_std: bool = False
+    """Whether to use fixed standard deviation."""
+    load_model_path: str = ""
+    """Path to the model to load."""
+    n_gausses: int = 40000
+    """Number of Gaussians in the model."""
+    density_activation: Callable = lambda x: trunc_exp(x - 1)
+    """Activation function for density."""
 
 
 class LagHashRadianceField(torch.nn.Module):
     """Lagrangian Hashes Radiance Field"""
 
-    def __init__(
-        self,
-        aabb: Union[torch.Tensor, List[float]],
-        num_dim: int = 3,
-        use_viewdirs: bool = True,
-        density_activation: Callable = lambda x: trunc_exp(x - 1),
-        unbounded: bool = False,
-        geo_feat_dim: int = 15,
-        n_features_per_gauss: int = 3,
-        n_neighbours: int = 5,
-        splits: List[float] = [0.875, 0.9375],
-        fixed_std: bool = False,
-        decay_factor: int = 1,
-        n_gausses: int = 10000,
-    ) -> None:
+    def __init__(self, config: LagHashRadianceFieldConfig):
+        self.config: LagHashRadianceFieldConfig = config
         super().__init__()
-        if not isinstance(aabb, torch.Tensor):
-            aabb = torch.tensor(aabb, dtype=torch.float32)
+
+    def populate(self, std_decay_factor, device = "cpu") -> None:
+        if not isinstance(self.config.aabb, torch.Tensor):
+            self.config.aabb = torch.tensor(self.config.aabb, dtype=torch.float32, device=device)
 
         # Turns out rectangle aabb will leads to uneven collision so bad performance.
         # We enforce a cube aabb here.
-        center = (aabb[..., :num_dim] + aabb[..., num_dim:]) / 2.0
-        size = (aabb[..., num_dim:] - aabb[..., :num_dim]).max()
-        aabb = torch.cat([center - size / 2.0, center + size / 2.0], dim=-1)
+        center = (self.config.aabb[..., :self.config.num_dim] + self.config.aabb[..., self.config.num_dim:]) / 2.0
+        size = (self.config.aabb[..., self.config.num_dim:] - self.config.aabb[..., :self.config.num_dim]).max()
+        self.config.aabb = torch.cat([center - size / 2.0, center + size / 2.0], dim=-1)
 
-        self.register_buffer("aabb", aabb)
-        self.num_dim = num_dim
-        self.use_viewdirs = use_viewdirs
-        self.density_activation = density_activation
-        self.unbounded = unbounded
-        self.geo_feat_dim = geo_feat_dim
-        self.fixed_std = fixed_std
-        self.decay_factor = decay_factor
-        self.splits = splits
+        self.register_buffer("aabb", self.config.aabb)
 
-        if self.use_viewdirs:
+        if self.config.use_viewdirs:
             self.direction_encoding = tcnn.Encoding(
-                n_input_dims=num_dim,
+                n_input_dims=self.config.num_dim,
                 encoding_config={
                     "otype": "Composite",
                     "nested": [
@@ -124,25 +141,25 @@ class LagHashRadianceField(torch.nn.Module):
             )
 
         self.mlp_base = lagrangian_hash.NetworkwithSplashEncoding(
-            fixed_std = fixed_std,
-            decay_factor=decay_factor,
-            n_features_per_gauss=n_features_per_gauss,
-            n_neighbours=n_neighbours,
-            n_gausses=n_gausses,
-            output_dim=1 + self.geo_feat_dim,
+            fixed_std = self.config.fixed_std,
+            decay_factor=std_decay_factor,
+            n_features_per_gauss=self.config.n_features_per_gauss,
+            n_neighbours=self.config.n_neighbours,
+            n_gausses=self.config.n_gausses,
+            output_dim=1 + self.config.geo_feat_dim,
             net_depth=1,
             net_width=64,
         )
 
-        if self.geo_feat_dim > 0:
+        if self.config.geo_feat_dim > 0:
             self.mlp_head = tcnn.Network(
                 n_input_dims=(
                     (
                         self.direction_encoding.n_output_dims
-                        if self.use_viewdirs
+                        if self.config.use_viewdirs
                         else 0
                     )
-                    + self.geo_feat_dim
+                    + self.config.geo_feat_dim
                 ),
                 n_output_dims=3,
                 network_config={
@@ -155,22 +172,22 @@ class LagHashRadianceField(torch.nn.Module):
             )
 
     def query_density(self, x, return_feat: bool = False, return_gmm: bool = False):
-        if self.unbounded:
-            x = contract_to_unisphere(x, self.aabb)
+        if self.config.unbounded:
+            x = contract_to_unisphere(x, self.config.aabb)
         else:
-            aabb_min, aabb_max = torch.split(self.aabb, self.num_dim, dim=-1)
+            aabb_min, aabb_max = torch.split(self.config.aabb, self.config.num_dim, dim=-1)
             x = (x - aabb_min) / (aabb_max - aabb_min)
         selector = ((x > 0.0) & (x < 1.0)).all(dim=-1)
-        out, gmm = self.mlp_base(x.view(-1, self.num_dim))
+        out, gmm = self.mlp_base(x.view(-1, self.config.num_dim))
         x = (
-            out.view(list(x.shape[:-1]) + [1 + self.geo_feat_dim])
+            out.view(list(x.shape[:-1]) + [1 + self.config.geo_feat_dim])
             .to(x)
         )
         density_before_activation, base_mlp_out = torch.split(
-            x, [1, self.geo_feat_dim], dim=-1
+            x, [1, self.config.geo_feat_dim], dim=-1
         )
         density = (
-            self.density_activation(density_before_activation)
+            self.config.density_activation(density_before_activation)
             * selector[..., None]
         )
         if return_feat:
@@ -186,12 +203,12 @@ class LagHashRadianceField(torch.nn.Module):
 
     def _query_rgb(self, dir, embedding, apply_act: bool = True):
         # tcnn requires directions in the range [0, 1]
-        if self.use_viewdirs:
+        if self.config.use_viewdirs:
             dir = (dir + 1.0) / 2.0
             d = self.direction_encoding(dir.reshape(-1, dir.shape[-1]))
-            h = torch.cat([d, embedding.reshape(-1, self.geo_feat_dim)], dim=-1)
+            h = torch.cat([d, embedding.reshape(-1, self.config.geo_feat_dim)], dim=-1)
         else:
-            h = embedding.reshape(-1, self.geo_feat_dim)
+            h = embedding.reshape(-1, self.config.geo_feat_dim)
         rgb = (
             self.mlp_head(h)
             .reshape(list(embedding.shape[:-1]) + [3])
@@ -206,7 +223,7 @@ class LagHashRadianceField(torch.nn.Module):
         positions: torch.Tensor,
         directions: torch.Tensor = None,
     ):
-        if self.use_viewdirs and (directions is not None):
+        if self.config.use_viewdirs and (directions is not None):
             assert (
                 positions.shape == directions.shape
             ), f"{positions.shape} v.s. {directions.shape}"

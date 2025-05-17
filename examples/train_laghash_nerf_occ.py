@@ -26,7 +26,7 @@ sys.path.append(project_root)
 
 from dataclasses import dataclass, field
 from typing import Type, Optional
-from datasets.nerf_synthetic import SubjectLoader
+from datasets.nerf_synthetic import SubjectLoaderConfig, SubjectLoader
 from datasets.tanks_and_temples import TanksTempleDataset
 from utils.general_utils import set_random_seed, TANKS_TEMPLE_SCENES, NERF_SYNTHETIC_SCENES
 from utils.loss_utils import calculate_loss_warmup, calculate_smooth_l1_loss
@@ -34,8 +34,9 @@ from utils.metric_utils import calculate_psnr
 from utils.render_utils import render_image_with_occgrid
 from utils.config_utils import InstantiateConfig, convert_markup_to_ansi, CONSOLE
 from nerfacc.estimators.occ_grid import OccGridEstimator
-from radiance_fields.laghash import LagHashRadianceField
+from radiance_fields.laghash import LagHashRadianceFieldConfig, LagHashRadianceField
 from pathlib import Path
+from configs.base_configs import BaseDatasetConfig, BaseDataset
 
 # Disable warnings
 warnings.filterwarnings("ignore")
@@ -43,27 +44,6 @@ warnings.filterwarnings("ignore")
 # A logger for this file
 log = logging.getLogger(__name__)
 
-@dataclass
-class DatasetConfig:
-    # _target: Type = field(default_factory=lambda: SubjectLoader)
-    # """Config class for the dataset."""
-    name: str = "Synthetic"
-    """Name of the dataset."""
-    data_root: Path = Path("data/nerf_dataset")
-    """Path to the dataset."""
-    scene: str = "ficus"
-    """Scene name."""
-    init_batch_size: int = 1024
-    """Initial batch size for training."""
-
-@dataclass
-class SceneConfig:
-    aabb: list = field(default_factory=lambda: [-1.5, -1.5, -1.5, 1.5, 1.5, 1.5])
-    """Axis-Aligned Bounding Box (AABB) of the scene."""
-    near_plane: float = 2.0
-    """Near plane distance."""
-    far_plane: float = 6.0
-    """Far plane distance."""
 
 @dataclass
 class RenderConfig:
@@ -73,40 +53,6 @@ class RenderConfig:
     """Alpha threshold for rendering."""
     cone_angle: float = 0.0
     """Cone angle for rendering."""
-
-@dataclass
-class ModelConfig:
-    log2_hashmap_size: int = 17
-    """Log2 of the size of the hashmap."""
-    n_levels: int = 16
-    """Number of levels in the hashmap."""
-    n_neighbours: int = 16
-    """Number of neighbours for the hashmap."""
-    n_features_per_gauss: int = 10
-    """Number of features per Gaussian."""
-    max_resolution: int = 1024
-    """Maximum resolution of the scene."""
-    num_splashes: int = 4
-    """Number of splashes in the scene."""
-    fixed_std: bool = False
-    """Whether to use fixed standard deviation."""
-    std_init_factor: float = 50
-    """Initial standard deviation factor."""
-    std_final_factor: float = 5
-    """Final standard deviation factor."""
-    load_model_path: str = ""
-    """Path to the model to load."""
-    splits: list = field(default_factory=lambda: [0.875, 0.9375])
-    """Splits for the model."""
-    n_gausses: int = 40000
-    """Number of Gaussians in the model."""
-
-@dataclass
-class OccupancyConfig:
-    grid_resolution: int = 128
-    """Resolution of the occupancy grid."""
-    grid_nlvl: int = 1
-    """Number of levels in the occupancy grid."""
 
 @dataclass
 class OptimizerConfig:
@@ -136,6 +82,10 @@ class TrainerConfig:
     """Model saving interval."""
     visualize_every: int = 500
     """Visualization interval."""
+    std_init_factor: float = 50
+    """Initial standard deviation factor."""
+    std_final_factor: float = 5
+    """Final standard deviation factor."""
     size_decay_every: int = 100
     """Size decay interval."""
     weight_surface: float = 1e-3
@@ -152,15 +102,11 @@ class ExperimentConfig(InstantiateConfig):
     """Config class for the Experiment."""
     load_config: Optional[Path] = None
     """Path to config YAML file."""
-    dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    dataset: BaseDatasetConfig = field(default_factory=SubjectLoaderConfig)
     """Dataset config."""
-    scene: SceneConfig = field(default_factory=SceneConfig)
-    """Scene config."""
     render: RenderConfig = field(default_factory=RenderConfig)
     """Render config."""
-    model: ModelConfig = field(default_factory=ModelConfig)
-    """Model config."""
-    occupancy: OccupancyConfig = field(default_factory=OccupancyConfig)
+    model: LagHashRadianceFieldConfig = field(default_factory=LagHashRadianceFieldConfig)
     """Occupancy config."""
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     """Optimizer config."""
@@ -216,19 +162,6 @@ def get_training_params(config: ExperimentConfig):
         "weight_decay": weight_decay,
     }
 
-def get_occupancy_params(config: ExperimentConfig):
-    return {
-        "grid_resolution": config.occupancy.grid_resolution,
-        "grid_nlvl": config.occupancy.grid_nlvl,
-    }
-
-def get_render_parameters(config: ExperimentConfig):
-    return {
-        "render_step_size": config.render.render_step_size,
-        "alpha_thre": config.render.alpha_thre,
-        "cone_angle": config.render.cone_angle,
-    }
-
 def get_dataset_and_scene_parameters(config: ExperimentConfig, device):
     scene = config.dataset.scene
     init_batch_size = config.dataset.init_batch_size
@@ -241,47 +174,31 @@ def get_dataset_and_scene_parameters(config: ExperimentConfig, device):
         test_dataset = TanksTempleDataset(
             data_path, split="test", downsample=1, is_stack=True, num_rays=None
         )
-        aabb = train_dataset.scene_bbox.to(device).view(-1)
-        near_plane, far_plane = train_dataset.near_far
         white_bg = train_dataset.white_bg
     else:
-        train_dataset = SubjectLoader(
-            subject_id=scene, root_fp=str(config.dataset.data_root),
-            split="train", num_rays=init_batch_size, device=device
+        config.dataset.split = "train"
+        train_dataset: BaseDataset = config.dataset.setup()
+        train_dataset.populate(
+            num_rays=init_batch_size, device=device
         )
-        test_dataset = SubjectLoader(
-            subject_id=scene, root_fp=str(config.dataset.data_root),
-            split="test", num_rays=None, device=device
+        config.dataset.split = "test"
+        test_dataset: BaseDataset = config.dataset.setup()
+        test_dataset.populate(
+            num_rays=None, device=device
         )
-        aabb = torch.tensor(config.scene.aabb, device=device)
-        near_plane = config.scene.near_plane
-        far_plane = config.scene.far_plane
         white_bg = None
 
     return {
         "train_dataset": train_dataset, 
         "test_dataset": test_dataset, 
-        "aabb": aabb, 
-        "near_plane": near_plane, 
-        "far_plane": far_plane, 
         "white_bg": white_bg
     }
 
-def initialize_estimator(aabb, grid_resolution, grid_nlvl, device):
-    return OccGridEstimator(roi_aabb=aabb, resolution=grid_resolution, levels=grid_nlvl).to(device)
-
-def initialize_radiance_field(config: ExperimentConfig, estimator, device):
-    std_decay_factor = (config.model.std_final_factor / config.model.std_init_factor) ** (config.trainer.size_decay_every/config.trainer.max_steps)
+def initialize_radiance_field(config: ExperimentConfig, estimator: OccGridEstimator, device):
     
-    radiance_field = LagHashRadianceField(
-        aabb=estimator.aabbs[-1], 
-        n_features_per_gauss=config.model.n_features_per_gauss,
-        n_neighbours=config.model.n_neighbours, 
-        fixed_std=config.model.fixed_std,
-        decay_factor=std_decay_factor, 
-        splits=config.model.splits,
-        n_gausses=config.model.n_gausses
-    ).to(device)
+    radiance_field: LagHashRadianceField = config.model.setup().to(device)
+    std_decay_factor = (config.trainer.std_final_factor / config.trainer.std_init_factor) ** (config.trainer.size_decay_every / config.trainer.max_steps)
+    radiance_field.populate(std_decay_factor, device=device)
 
     if config.model.load_model_path != "":
         state = torch.load(config.model.load_model_path, map_location=device)
@@ -348,35 +265,18 @@ class Experiment(nn.Module):
                 train_params["target_sample_batch_size"], 
                 train_params["weight_decay"]
             )
-            
-            occupancy_params = get_occupancy_params(self.config)
-            grid_resolution, grid_nlvl = (
-                occupancy_params["grid_resolution"],
-                occupancy_params["grid_nlvl"]
-            )
-
-            render_params = get_render_parameters(self.config)
-            render_step_size, alpha_thre, cone_angle = (
-                render_params["render_step_size"],
-                render_params["alpha_thre"],
-                render_params["cone_angle"]
-            )
 
             dataset_params = get_dataset_and_scene_parameters(self.config, device)
-            train_dataset, test_dataset, aabb, near_plane, far_plane, white_bg = (
+            train_dataset, test_dataset = (
                 dataset_params["train_dataset"],
-                dataset_params["test_dataset"],
-                dataset_params["aabb"],
-                dataset_params["near_plane"],
-                dataset_params["far_plane"],
-                dataset_params["white_bg"]
+                dataset_params["test_dataset"]
             )
         else:
             error_message = f"Invalid scene: {self.config.dataset.scene}"
             logging.error(error_message)
             raise ValueError(error_message)
 
-        estimator = initialize_estimator(aabb, grid_resolution, grid_nlvl, device)
+        estimator = OccGridEstimator(roi_aabb=self.config.model.aabb, resolution=self.config.model.grid_resolution, levels=self.config.model.grid_nlvl).to(device)
 
         grad_scaler = torch.cuda.amp.GradScaler(2**10)
         radiance_field = initialize_radiance_field(self.config, estimator, device)
@@ -400,7 +300,7 @@ class Experiment(nn.Module):
 
             def occ_eval_fn(x):
                 density = radiance_field.query_density(x)
-                return density * render_step_size
+                return density * self.config.render.render_step_size
 
             # update occupancy grid
             estimator.update_every_n_steps(
@@ -415,11 +315,11 @@ class Experiment(nn.Module):
                 estimator,
                 rays,
                 # rendering options
-                near_plane=near_plane,
-                render_step_size=render_step_size,
+                near_plane=self.config.dataset.near_plane,
+                render_step_size=self.config.render.render_step_size,
                 render_bkgd=render_bkgd,
-                cone_angle=cone_angle,
-                alpha_thre=alpha_thre,
+                cone_angle=self.config.render.cone_angle,
+                alpha_thre=self.config.render.alpha_thre,
             )
 
             if n_rendering_samples == 0:
@@ -509,11 +409,11 @@ class Experiment(nn.Module):
                     estimator,
                     rays,
                     # rendering options
-                    near_plane=near_plane,
-                    render_step_size=render_step_size,
+                    near_plane=self.config.dataset.near_plane,
+                    render_step_size=self.config.render.render_step_size,
                     render_bkgd=render_bkgd,
-                    cone_angle=cone_angle,
-                    alpha_thre=alpha_thre,
+                    cone_angle=self.config.render.cone_angle,
+                    alpha_thre=self.config.render.alpha_thre,
                 )
                 
                 psnrs.append(calculate_psnr(rgb, pixels))
