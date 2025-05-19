@@ -56,7 +56,7 @@ class Renderer:
 
         # for mean in means:
         #     if mean[0] > 0.5:
-        #         mean[0] -= 0.1
+        #         mean[0] += 0.1
 
         # model_state_dict["model"]["mlp_base.encoding.means"] = means
 
@@ -72,6 +72,7 @@ class Renderer:
 
         # Define estimator
         estimator = OccGridEstimator(roi_aabb=config.model.aabb, resolution=config.model.grid_resolution, levels=config.model.grid_nlvl).to(self.device)
+        model_state_dict['occupancy']['binaries'].fill_(True)
         estimator.load_state_dict(model_state_dict['occupancy'])
         estimator.eval()
 
