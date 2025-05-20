@@ -230,3 +230,13 @@ class SubjectLoader(BaseDataset):
             "rgba": rgba,  # [h, w, 4] or [num_rays, 4]
             "rays": rays,  # [h, w, 3] or [num_rays, 3]
         }
+    
+    def get_weight_decay(self) -> float:
+        """Get the weight decay for the dataset."""
+        
+        weight_decay = (
+            1e-5 if self.config.scene in ["materials", "ficus", "drums"]
+            else 1e-6
+        )
+
+        return weight_decay

@@ -30,7 +30,7 @@ class ViewerConfig(InstantiateConfig):
 
 class Viewer:
 
-    def __init__(self, config: ViewerConfig, radiance_field = None, estimator = None, near_plane = None, render_step_size = None, cone_angle = None, alpha_thre = None):
+    def __init__(self, config: ViewerConfig, radiance_field = None, estimator = None, near_plane = None, render_step_size = None, cone_angle = None, alpha_thre = None, device = "cpu"):
 
         self.config = config
 
@@ -39,6 +39,7 @@ class Viewer:
         self.start_button: viser.GuiButtonHandle = self.server.add_button("Start Training")
         self.ready = False
         self.pause_training = False
+        self.device = device
 
         # Store client references
         clients = set()
@@ -78,7 +79,7 @@ class Viewer:
                             rays,
                             near_plane=near_plane,
                             render_step_size=render_step_size,
-                            render_bkgd=torch.ones(3, device="cuda"),
+                            render_bkgd=torch.ones(3, device=device),
                             cone_angle=cone_angle,
                             alpha_thre=alpha_thre
                         )
@@ -100,8 +101,8 @@ class Viewer:
     def get_camera_state(self, client: viser.ClientHandle):
         R = vtf.SO3(wxyz=client.camera.wxyz)
         R = R @ vtf.SO3.from_x_radians(np.pi)
-        R = torch.tensor(R.as_matrix(), dtype=torch.float32, device="cuda")
-        pos = torch.tensor(client.camera.position, dtype=torch.float32, device="cuda")
+        R = torch.tensor(R.as_matrix(), dtype=torch.float32, device=self.device)
+        pos = torch.tensor(client.camera.position, dtype=torch.float32, device=self.device)
         c2w = torch.concatenate([R, pos[:, None]], dim=1)
         return pos, c2w
 
@@ -131,8 +132,8 @@ class Viewer:
 
         # Create rays
         x, y = torch.meshgrid(
-            torch.arange(width, device="cuda"),
-            torch.arange(height, device="cuda"),
+            torch.arange(width, device=self.device),
+            torch.arange(height, device=self.device),
             indexing="xy",
         )
         x = x.flatten()

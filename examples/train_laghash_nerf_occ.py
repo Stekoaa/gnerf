@@ -7,21 +7,14 @@ from __future__ import annotations
 import os
 import sys
 import time
-import warnings
 
 import tyro
-import imageio
 import numpy as np
 import torch
 import yaml
 import trimesh
-import viser.transforms as vtf
 from tqdm import tqdm
 from torch import nn
-import torch.nn.functional as F
-from datasets.utils import Rays
-import io
-from PIL import Image
 
 home_dir = os.path.expanduser('~')
 project_root = os.path.join(home_dir, 'gnerf')
@@ -29,7 +22,7 @@ sys.path.append(project_root)
 
 from dataclasses import dataclass, field
 from typing import Type, Optional
-from datasets.nerf_synthetic import SubjectLoaderConfig, SubjectLoader
+from datasets.nerf_synthetic import SubjectLoaderConfig
 from datasets.tanks_and_temples import TanksTempleDataset
 from utils.general_utils import set_random_seed, TANKS_TEMPLE_SCENES, NERF_SYNTHETIC_SCENES
 from utils.loss_utils import calculate_loss_warmup, calculate_smooth_l1_loss
@@ -40,9 +33,6 @@ from radiance_fields.laghash import LagHashRadianceFieldConfig, LagHashRadianceF
 from pathlib import Path
 from configs.base_configs import BaseDatasetConfig, BaseDataset
 from viewer import ViewerConfig, Viewer
-
-# Disable warnings
-warnings.filterwarnings("ignore")
 
 
 @dataclass
@@ -135,19 +125,19 @@ class ExperimentConfig(InstantiateConfig):
         config_yaml_path.write_text(yaml.dump(self), "utf8")
 
 
-def get_training_params(config: ExperimentConfig):
-    scene = config.dataset.scene
-    if scene in TANKS_TEMPLE_SCENES:
-        weight_decay = config.optimizer.weight_decay
-    else:
-        weight_decay = (
-            1e-5 if scene in ["materials", "ficus", "drums"]
-            else 1e-6
-        )
+# def get_training_params(config: ExperimentConfig):
+#     scene = config.dataset.scene
+#     if scene in TANKS_TEMPLE_SCENES:
+#         weight_decay = config.optimizer.weight_decay
+#     else:
+#         weight_decay = (
+#             1e-5 if scene in ["materials", "ficus", "drums"]
+#             else 1e-6
+#         )
     
-    return {
-        "weight_decay": weight_decay,
-    }
+#     return {
+#         "weight_decay": weight_decay,
+#     }
 
 # def get_dataset_and_scene_parameters(config: ExperimentConfig, device):
 #     scene = config.dataset.scene
@@ -165,20 +155,8 @@ def get_training_params(config: ExperimentConfig):
 #         "train_dataset": train_dataset, 
 #     }
 
-def initialize_radiance_field(config: ExperimentConfig, estimator: OccGridEstimator, device):
-    
-    std_decay_factor = (config.trainer.std_final_factor / config.trainer.std_init_factor) ** (config.trainer.size_decay_every / config.trainer.max_steps)
-    radiance_field: LagHashRadianceField = config.model.setup(std_decay_factor=std_decay_factor, device=device).to(device)
 
-    if config.model.load_model_path != "":
-        state = torch.load(config.model.load_model_path, map_location=device)
-        radiance_field.load_state_dict(state['model'])
-        estimator.load_state_dict(state['occupancy'])
-        CONSOLE.log(f"Loaded model from {config.model.load_model_path}")
-    
-    return radiance_field
-
-def initialize_optimizer(config, radiance_field, weight_decay):
+def initialize_optimizer(config: ExperimentConfig, radiance_field, weight_decay):
     params_dict = { name : param for name, param in radiance_field.named_parameters()}
     
     gau_params, codebook_params, rest_params = [], [], []
@@ -224,12 +202,8 @@ class Experiment(nn.Module):
         self.config.save_config()
 
         if self.config.dataset.scene in TANKS_TEMPLE_SCENES or self.config.dataset.scene in NERF_SYNTHETIC_SCENES:
-            train_params = get_training_params(self.config)
-            weight_decay = (
-                train_params["weight_decay"]
-            )
-
             train_dataset: BaseDataset = self.config.dataset.setup(split="train", num_rays=self.config.dataset.init_batch_size, device=self.device)
+            weight_decay = train_dataset.get_weight_decay()
         else:
             error_message = f"Invalid scene: {self.config.dataset.scene}"
             raise ValueError(error_message)
@@ -237,7 +211,8 @@ class Experiment(nn.Module):
         self.estimator = OccGridEstimator(roi_aabb=self.config.model.aabb, resolution=self.config.model.grid_resolution, levels=self.config.model.grid_nlvl).to(self.device)
 
         grad_scaler = torch.cuda.amp.GradScaler(2**10)
-        self.radiance_field = initialize_radiance_field(self.config, self.estimator, self.device)
+        std_decay_factor = (self.config.trainer.std_final_factor / self.config.trainer.std_init_factor) ** (self.config.trainer.size_decay_every / self.config.trainer.max_steps)
+        self.radiance_field: LagHashRadianceField = self.config.model.setup(std_decay_factor=std_decay_factor, device=self.device).to(self.device)
 
         num_params = sum(p.numel() for p in self.radiance_field.parameters() if p.requires_grad)
         CONSOLE.log(f"Number of parameters: {num_params/1e6:.2f}M")
@@ -250,7 +225,8 @@ class Experiment(nn.Module):
                                                        near_plane = self.config.dataset.near_plane, 
                                                        render_step_size = self.config.trainer.render_step_size, 
                                                        cone_angle = self.config.trainer.cone_angle, 
-                                                       alpha_thre = self.config.trainer.alpha_thre)
+                                                       alpha_thre = self.config.trainer.alpha_thre,
+                                                       device = self.device)
         
         # Wait for the user to click the start button in viser
         while not self.viewer.start_button.value:
