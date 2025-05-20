@@ -107,8 +107,10 @@ class SplashEncoding(nn.Module):
 
         N, D = coords.shape
 
-        # Create CPU index and move to GPU
+        # Prepare FAISS
         res = faiss.StandardGpuResources()
+
+        # Create CPU index and move to GPU
         gpu_index = faiss.GpuIndexFlatL2(res, D)
 
         # Add means directly
@@ -136,8 +138,10 @@ class SplashEncoding(nn.Module):
         N, D = coords.shape
         M = self.means.shape[0]
 
-        # Create IVF index
+        # Prepare FAISS
         res = faiss.StandardGpuResources()
+
+        # Create IVF index
         quantizer = faiss.GpuIndexFlatL2(res, D)  # the base index for coarse quantizer
         index_ivf = faiss.GpuIndexIVFFlat(res, quantizer, D, nlist, faiss.METRIC_L2)
 
@@ -184,9 +188,9 @@ class SplashEncoding(nn.Module):
         batch_size = 20000
 
         start_time = time.time()
-        # nearest_gausses_indicies = self._get_nearest_gausses_indicies(coords, batch_size=batch_size)
+        nearest_gausses_indicies = self._get_nearest_gausses_indicies(coords, batch_size=batch_size)
         # nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss(coords)
-        nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss_ivf(coords)
+        # nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss_ivf(coords)
         feats = self._calculate(coords, nearest_gausses_indicies, batch_size=batch_size)
         print(f"Features: {time.time() - start_time:.4f} seconds")
         gmm=None

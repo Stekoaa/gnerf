@@ -44,7 +44,7 @@ def render_image_with_occgrid(
     cone_angle: float = 0.0,
     alpha_thre: float = 0.0,
     # test options
-    test_chunk_size: int = 81920,
+    test_chunk_size: int = int(81920),
     # only useful for dnerf
     timestamps: Optional[torch.Tensor] = None,
 ):
