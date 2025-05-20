@@ -244,11 +244,10 @@ class Experiment(nn.Module):
             
                 def get_intrinsic_matrix(client: viser.ClientHandle, width: int, height: int):
                     # Get camera parameters
-                    hfov_rad = client.camera.fov
+                    vfov_rad = client.camera.fov
             
                     # Compute focal length fx (assuming pinhole camera model)
-                    fx = (width / 2) / np.tan(hfov_rad / 2)
-                    fy = fx * height / width  # maintain aspect ratio (assuming square pixels)
+                    fx = fy = (height / 2) / np.tan(vfov_rad / 2)
             
                     cx = width / 2
                     cy = height / 2
@@ -496,6 +495,14 @@ class Experiment(nn.Module):
                 CONSOLE.log(f"Means saved to {means_lod_path}")
 
             means = self.radiance_field.mlp_base.encoding.get_means()
+
+            def denormalize_points(points: torch.Tensor, aabb: torch.Tensor) -> torch.Tensor:
+                num_dim = points.shape[-1]
+                aabb_min, aabb_max = torch.split(aabb, num_dim)
+                return points * (aabb_max - aabb_min) + aabb_min
+            
+            means = denormalize_points(means, self.config.model.aabb)
+
             means = means.reshape(-1, means.shape[-1])
             means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
 
@@ -504,7 +511,7 @@ class Experiment(nn.Module):
                 "/means",
                 points=means_cloud.vertices,
                 colors=np.tile((0, 0, 255), means_cloud.vertices.shape[0]).reshape(-1, 3) * color_coeffs[:, None],
-                point_size=0.001,
+                point_size=0.002,
                 point_shape="circle"
             )
 
