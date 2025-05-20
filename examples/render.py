@@ -10,7 +10,7 @@ import yaml
 from dataclasses import dataclass, field
 from tqdm import tqdm
 from pathlib import Path
-from typing import Optional
+from typing import Type, Optional
 
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from utils.config_utils import InstantiateConfig, convert_markup_to_ansi
@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class RendererConfig(InstantiateConfig):
     """Configuration for the Renderer."""
-    _target: type = field(default_factory=lambda: Renderer)
+    _target: Type = field(default_factory=lambda: Renderer)
     """Target class for the Renderer."""
     load_config: Optional[Path] = None
     """Path to the configuration file."""

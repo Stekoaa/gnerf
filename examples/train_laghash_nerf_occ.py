@@ -15,7 +15,6 @@ import numpy as np
 import torch
 import yaml
 import trimesh
-import viser
 import viser.transforms as vtf
 from tqdm import tqdm
 from torch import nn
@@ -40,6 +39,7 @@ from nerfacc.estimators.occ_grid import OccGridEstimator
 from radiance_fields.laghash import LagHashRadianceFieldConfig, LagHashRadianceField
 from pathlib import Path
 from configs.base_configs import BaseDatasetConfig, BaseDataset
+from viewer import ViewerConfig, Viewer
 
 # Disable warnings
 warnings.filterwarnings("ignore")
@@ -111,6 +111,8 @@ class ExperimentConfig(InstantiateConfig):
     """Scheduler config."""
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     """Trainer config."""
+    viewer: ViewerConfig = field(default_factory=ViewerConfig)
+    """Viewer config."""
     output_path: Path = Path("results")
     """Path to save the results."""
     timestamp: str = field(default_factory=lambda: time.strftime("%Y-%m-%d_%H-%M-%S"))
@@ -214,151 +216,12 @@ class Experiment(nn.Module):
         self.device = config.device
         self.output_path = config.get_output_path()
 
-        # Viser
-        self.viser_server = viser.ViserServer(port=8080)
-        self.start_button: viser.GuiButtonHandle = self.viser_server.add_button("Start Training")
-        self.ready = False
-        self.pause_training = False
-
-        @self.start_button.on_click
-        def on_start_button_click(_):
-            self.start_button.disabled == True
-        
-        # Store client references
-        clients = set()
-
-        @self.viser_server.on_client_connect
-        def handle_connect(client: viser.ClientHandle):
-            clients.add(client)
-
-            @client.camera.on_update
-            def _(_: viser.CameraHandle) -> None:
-
-                def get_camera_state(client: viser.ClientHandle):
-                    R = vtf.SO3(wxyz=client.camera.wxyz)
-                    R = R @ vtf.SO3.from_x_radians(np.pi)
-                    R = torch.tensor(R.as_matrix(), dtype=torch.float32, device="cuda")
-                    pos = torch.tensor(client.camera.position, dtype=torch.float32, device="cuda")
-                    c2w = torch.concatenate([R, pos[:, None]], dim=1)
-                    return pos, c2w
-            
-                def get_intrinsic_matrix(client: viser.ClientHandle, width: int, height: int):
-                    # Get camera parameters
-                    vfov_rad = client.camera.fov
-            
-                    # Compute focal length fx (assuming pinhole camera model)
-                    fx = fy = (height / 2) / np.tan(vfov_rad / 2)
-            
-                    cx = width / 2
-                    cy = height / 2
-            
-                    # Intrinsic matrix
-                    K = np.array([
-                        [fx,  0, cx],
-                        [0,  fy, cy],
-                        [0,   0,  1]
-                    ])
-            
-                    return K
-
-                if not self.ready:
-                    return
-                # self.last_move_time = time.time()
-                with self.viser_server.atomic():
-                    with torch.no_grad():
-                        self.ready = False
-                        self.pause_training = True
-                        position, c2w = get_camera_state(client)
-                        # Set width and height based on aspect ratio
-                        width = 200
-                        aspect = client.camera.aspect
-                        height = int(width / aspect) if aspect > 0 else width
-                        opengl_camera = True
-
-                        K = get_intrinsic_matrix(client, width, height)
-
-                        # generate rays
-                        x, y = torch.meshgrid(
-                            torch.arange(width, device="cuda"),
-                            torch.arange(height, device="cuda"),
-                            indexing="xy",
-                        )
-                        x = x.flatten()
-                        y = y.flatten()
-
-                        camera_dirs = F.pad(
-                            torch.stack(
-                                [
-                                    (x - K[0, 2] + 0.5) / K[0, 0],
-                                    (y - K[1, 2] + 0.5)
-                                    / K[1, 1]
-                                    * (-1.0 if opengl_camera else 1.0),
-                                ],
-                                dim=-1,
-                            ),
-                            (0, 1),
-                            value=(-1.0 if opengl_camera else 1.0),
-                        )  # [num_rays, 3]
-
-                        # [n_cams, height, width, 3]
-                        directions = (camera_dirs @ c2w[:3, :3].T)
-                        origins = torch.broadcast_to(c2w[:3, 3], directions.shape)
-                        viewdirs = directions / torch.linalg.norm(
-                            directions, dim=-1, keepdims=True
-                        )
-
-                        origins = torch.reshape(origins, (width, height, 3))
-                        viewdirs = torch.reshape(viewdirs, (width, height, 3))
-
-                        rays = Rays(origins=origins, viewdirs=viewdirs)
-
-                        self.radiance_field.eval()
-                        self.estimator.eval()
-
-                        rgb, _, _, _, _, _ = render_image_with_occgrid(
-                            self.radiance_field,
-                            self.estimator,
-                            rays,
-                            # rendering options
-                            near_plane=config.dataset.near_plane,
-                            render_step_size=config.trainer.render_step_size,
-                            render_bkgd=torch.ones(3, device="cuda"),
-                            cone_angle=config.trainer.cone_angle,
-                            alpha_thre=config.trainer.alpha_thre,
-                        )
-
-                        self.radiance_field.train()
-                        self.estimator.train()
-                        np_image = rgb.detach().cpu().numpy()
-
-                        print(np_image.shape)
-
-                        np_image = np_image.reshape(height, width, 3)
-
-                        # print(f"Camera intrinsic matrix: {K}")
-                        print(f"Camera position: {position}")
-                        # print(f"Camera rotation: {c2w}")
-                        print("-----------------------------------------------------------")
-
-                        client.scene.set_background_image(np_image)
-
-                        self.pause_training = False
-
-        @self.viser_server.on_client_disconnect
-        def handle_disconnect(client: viser.ClientHandle):
-            clients.remove(client)
-
     def run(self):
         set_random_seed(42)
         
         CONSOLE.log(f"Saving outputs in: {self.output_path}")
         os.makedirs(os.path.join(self.output_path, 'test'), exist_ok=True)
         self.config.save_config()
-
-        # Wait for the user to click the start button in viser
-        while not self.start_button.value:
-            print("Waiting for the start button to be clicked...")
-            time.sleep(1)
 
         if self.config.dataset.scene in TANKS_TEMPLE_SCENES or self.config.dataset.scene in NERF_SYNTHETIC_SCENES:
             train_params = get_training_params(self.config)
@@ -381,7 +244,19 @@ class Experiment(nn.Module):
         
         optimizer = initialize_optimizer(self.config, self.radiance_field, weight_decay)
         scheduler = initialize_scheduler(self.config, optimizer)
+
+        self.viewer: Viewer = self.config.viewer.setup(radiance_field = self.radiance_field, 
+                                                       estimator = self.estimator, 
+                                                       near_plane = self.config.dataset.near_plane, 
+                                                       render_step_size = self.config.trainer.render_step_size, 
+                                                       cone_angle = self.config.trainer.cone_angle, 
+                                                       alpha_thre = self.config.trainer.alpha_thre)
         
+        # Wait for the user to click the start button in viser
+        while not self.viewer.start_button.value:
+            print("Waiting for the start button to be clicked...")
+            time.sleep(1)
+
         # training
         CONSOLE.log('Starting training')
         tic = time.time()
@@ -389,7 +264,7 @@ class Experiment(nn.Module):
             self.radiance_field.train()
             self.estimator.train()
 
-            while self.pause_training:
+            while self.viewer.pause_training:
                 print("Training_paused...")
                 time.sleep(1)
 
@@ -507,7 +382,7 @@ class Experiment(nn.Module):
             means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
 
             color_coeffs = np.random.uniform(0.4, 1.0, size=(means_cloud.vertices.shape[0]))
-            self.viser_server.scene.add_point_cloud(
+            self.viewer.server.scene.add_point_cloud(
                 "/means",
                 points=means_cloud.vertices,
                 colors=np.tile((0, 0, 255), means_cloud.vertices.shape[0]).reshape(-1, 3) * color_coeffs[:, None],
@@ -515,7 +390,7 @@ class Experiment(nn.Module):
                 point_shape="circle"
             )
 
-            self.ready = True
+            self.viewer.ready = True
 
 
 def entrypoint():
