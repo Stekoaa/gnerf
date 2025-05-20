@@ -242,10 +242,9 @@ class Experiment(nn.Module):
                     c2w = torch.concatenate([R, pos[:, None]], dim=1)
                     return pos, c2w
             
-                def get_intrinsic_matrix(client: viser.ClientHandle):
+                def get_intrinsic_matrix(client: viser.ClientHandle, width: int, height: int):
                     # Get camera parameters
                     hfov_rad = client.camera.fov
-                    width, height = 100, 100
             
                     # Compute focal length fx (assuming pinhole camera model)
                     fx = (width / 2) / np.tan(hfov_rad / 2)
@@ -271,9 +270,13 @@ class Experiment(nn.Module):
                         self.ready = False
                         self.pause_training = True
                         position, c2w = get_camera_state(client)
-                        K = get_intrinsic_matrix(client)
-                        width, height = 100, 100
+                        # Set width and height based on aspect ratio
+                        width = 200
+                        aspect = client.camera.aspect
+                        height = int(width / aspect) if aspect > 0 else width
                         opengl_camera = True
+
+                        K = get_intrinsic_matrix(client, width, height)
 
                         # generate rays
                         x, y = torch.meshgrid(
@@ -320,30 +323,23 @@ class Experiment(nn.Module):
                             # rendering options
                             near_plane=config.dataset.near_plane,
                             render_step_size=config.trainer.render_step_size,
-                            render_bkgd=None,
+                            render_bkgd=torch.ones(3, device="cuda"),
                             cone_angle=config.trainer.cone_angle,
                             alpha_thre=config.trainer.alpha_thre,
                         )
-
-
-                        print(rgb)
 
                         self.radiance_field.train()
                         self.estimator.train()
                         np_image = rgb.detach().cpu().numpy()
 
+                        print(np_image.shape)
+
+                        np_image = np_image.reshape(height, width, 3)
+
                         # print(f"Camera intrinsic matrix: {K}")
                         print(f"Camera position: {position}")
                         # print(f"Camera rotation: {c2w}")
                         print("-----------------------------------------------------------")
-
-                        # self.viser_server.scene.add_image(
-                        #     "/rendered_image",
-                        #     image=np_image,
-                        #     render_width=1.0,
-                        #     render_height=1.0,
-                        #     wxyz=client.camera.wxyz
-                        # )
 
                         client.scene.set_background_image(np_image)
 
