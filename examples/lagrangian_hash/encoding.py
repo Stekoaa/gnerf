@@ -49,7 +49,7 @@ class SplashEncoding(nn.Module):
         pts = np.random.randn(N, 3)
         r = np.sqrt(np.random.rand(N, 1))
         pts = pts / np.linalg.norm(pts, axis=1)[:, None] * r
-        pts = pts * 0.25 + 0.5 # [0.25 ... 0.75]
+        pts = pts * 0.5 + 0.5 # [0.25 ... 0.75]
         
         self.means = torch.tensor(pts, dtype=torch.float32, device='cuda')
 
@@ -185,11 +185,11 @@ class SplashEncoding(nn.Module):
         
 
     def forward(self, coords, lod_idx=None):
-        batch_size = 20000
+        batch_size = 1000
 
         start_time = time.time()
-        nearest_gausses_indicies = self._get_nearest_gausses_indicies(coords, batch_size=batch_size)
-        # nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss(coords)
+        # nearest_gausses_indicies = self._get_nearest_gausses_indicies(coords, batch_size=batch_size)
+        nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss(coords)
         # nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss_ivf(coords)
         feats = self._calculate(coords, nearest_gausses_indicies, batch_size=batch_size)
         print(f"Features: {time.time() - start_time:.4f} seconds")

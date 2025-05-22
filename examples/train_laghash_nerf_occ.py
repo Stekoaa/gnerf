@@ -13,8 +13,10 @@ import numpy as np
 import torch
 import yaml
 import trimesh
+import torch.nn.functional as F
 from tqdm import tqdm
 from torch import nn
+from scipy.ndimage import distance_transform_edt
 
 home_dir = os.path.expanduser('~')
 project_root = os.path.join(home_dir, 'gnerf')
@@ -156,6 +158,12 @@ class ExperimentConfig(InstantiateConfig):
 #     }
 
 
+def denormalize_points(points: torch.Tensor, aabb: torch.Tensor) -> torch.Tensor:
+    num_dim = points.shape[-1]
+    aabb_min, aabb_max = torch.split(aabb, num_dim)
+    return points * (aabb_max - aabb_min) + aabb_min
+
+
 def initialize_optimizer(config: ExperimentConfig, radiance_field, weight_decay):
     params_dict = { name : param for name, param in radiance_field.named_parameters()}
     
@@ -236,6 +244,7 @@ class Experiment(nn.Module):
         # training
         CONSOLE.log('Starting training')
         tic = time.time()
+        self.distance_field = None
         for step in tqdm(range(self.config.trainer.max_steps + 1), desc="Training"):
             self.radiance_field.train()
             self.estimator.train()
@@ -250,6 +259,10 @@ class Experiment(nn.Module):
 
             def occ_eval_fn(x):
                 density = self.radiance_field.query_density(x)
+                if step > -1:
+                    self.distance_field = distance_transform_edt(~self.estimator.binaries.squeeze(0).detach().cpu().numpy(), sampling=3/128)
+                    self.distance_field = torch.tensor(self.distance_field, dtype=torch.float32).squeeze(0)
+                    self.distance_field = self.distance_field.to(self.device)
                 return density * self.config.trainer.render_step_size
 
             # update occupancy grid
@@ -281,6 +294,7 @@ class Experiment(nn.Module):
                 train_dataset.update_num_rays(num_rays)
 
             # compute loss
+            loss = torch.tensor(0.0, device=self.device)
             loss_warm_up = calculate_loss_warmup(step, self.config.trainer.max_steps)
             mip_loss = mip_loss.mean() # distortion loss
             sigma_loss, surf_loss, i = 0, 0, 0
@@ -296,7 +310,95 @@ class Experiment(nn.Module):
                 sigma_loss /= i
             surf_loss = kl_div.mean()
 
-            loss = calculate_smooth_l1_loss(rgb, pixels)
+            if self.distance_field is not None:
+                def points_to_grid_coords(points, aabb):
+                    xyz_min, xyz_max = aabb[:3], aabb[3:]
+                    # Normalize to [0, 1]
+                    normalized = (points - xyz_min) / (xyz_max - xyz_min)
+                    # Convert to [-1, 1] for grid_sample
+                    return normalized * 2 - 1
+                
+
+                def trilinear_interpolation(distance_field, points, aabb):
+                    """
+                    Args:
+                        distance_field: (D, H, W) tensor on same device as points.
+                        points: (N, 3) tensor in world coordinates.
+                        aabb: (6,) tensor [min_x, min_y, min_z, max_x, max_y, max_z].
+
+                    Returns:
+                        distances: (N,) interpolated values at points.
+                    """
+                    D, H, W = distance_field.shape
+                    device = points.device
+                    dtype = points.dtype
+
+                    xyz_min, xyz_max = aabb[:3], aabb[3:]
+                    grid_size = torch.tensor([W, H, D], device=device, dtype=dtype)
+                    voxel_size = (xyz_max - xyz_min) / grid_size
+
+                    # Normalize to grid space
+                    grid_coords = (points - xyz_min) / voxel_size  # shape (N, 3)
+
+                    # Clamp to avoid indexing outside
+                    min_val = torch.zeros(3, device=device, dtype=dtype)
+                    max_val = grid_size - 1 - 1e-6
+                    grid_coords = torch.clamp(grid_coords, min_val, max_val)
+
+                    # Get integer and fractional parts
+                    idx0 = grid_coords.floor().long()  # (N, 3)
+                    d = grid_coords - idx0.float()     # (N, 3)
+                    idx1 = idx0 + 1
+
+                    x0, y0, z0 = idx0.unbind(dim=1)
+                    x1, y1, z1 = idx1.unbind(dim=1)
+                    dx, dy, dz = d.unbind(dim=1)
+
+                    def get_vals(x, y, z):
+                        x = torch.clamp(x, 0, W - 1)
+                        y = torch.clamp(y, 0, H - 1)
+                        z = torch.clamp(z, 0, D - 1)
+                        return distance_field[z, y, x]
+
+                    c000 = get_vals(x0, y0, z0)
+                    c100 = get_vals(x1, y0, z0)
+                    c010 = get_vals(x0, y1, z0)
+                    c110 = get_vals(x1, y1, z0)
+                    c001 = get_vals(x0, y0, z1)
+                    c101 = get_vals(x1, y0, z1)
+                    c011 = get_vals(x0, y1, z1)
+                    c111 = get_vals(x1, y1, z1)
+
+                    # Trilinear interpolation
+                    c00 = c000 * (1 - dx) + c100 * dx
+                    c01 = c001 * (1 - dx) + c101 * dx
+                    c10 = c010 * (1 - dx) + c110 * dx
+                    c11 = c011 * (1 - dx) + c111 * dx
+
+                    c0 = c00 * (1 - dy) + c10 * dy
+                    c1 = c01 * (1 - dy) + c11 * dy
+
+                    c = c0 * (1 - dz) + c1 * dz  # (N,)
+
+                    return c
+
+                # Normalize points to aabb for grid_sample
+                means = self.radiance_field.mlp_base.encoding.get_means()
+                means = denormalize_points(means, self.config.model.aabb)
+                # Rotate means 90 degrees around y axis
+                rot = torch.tensor([[0, 0, 1],
+                                    [0, 1, 0],
+                                    [-1, 0, 0]], dtype=means.dtype, device=means.device)
+                means = means @ rot.T
+                grid_coords = points_to_grid_coords(means, self.config.model.aabb)
+                grid_coords = grid_coords.view(1, -1, 1, 1, 3)  # shape (1, N, 1, 1, 3)
+
+                # Sample the distance field
+                aabb = self.config.model.aabb.to(means.device)
+                distances = trilinear_interpolation(self.distance_field, means, aabb)
+                loss += distances.mean() * 1e-2
+
+            loss += calculate_smooth_l1_loss(rgb, pixels)
             if self.config.trainer.weight_surface:
                 loss += self.config.trainer.weight_surface * loss_warm_up * surf_loss
             if self.config.trainer.weight_sigma and (not self.config.model.fixed_std):
@@ -346,12 +448,6 @@ class Experiment(nn.Module):
                 CONSOLE.log(f"Means saved to {means_lod_path}")
 
             means = self.radiance_field.mlp_base.encoding.get_means()
-
-            def denormalize_points(points: torch.Tensor, aabb: torch.Tensor) -> torch.Tensor:
-                num_dim = points.shape[-1]
-                aabb_min, aabb_max = torch.split(aabb, num_dim)
-                return points * (aabb_max - aabb_min) + aabb_min
-            
             means = denormalize_points(means, self.config.model.aabb)
 
             means = means.reshape(-1, means.shape[-1])
@@ -363,6 +459,37 @@ class Experiment(nn.Module):
                 points=means_cloud.vertices,
                 colors=np.tile((0, 0, 255), means_cloud.vertices.shape[0]).reshape(-1, 3) * color_coeffs[:, None],
                 point_size=0.002,
+                point_shape="circle"
+            )
+
+            # Step 1: Generate voxel grid indices
+            occ_grid = self.estimator.binaries.bool().squeeze(0)
+            res = occ_grid.shape[0]
+            device = occ_grid.device
+
+            grid_coords = torch.stack(torch.meshgrid(
+                torch.arange(res, device=device),
+                torch.arange(res, device=device),
+                torch.arange(res, device=device),
+                indexing='ij'
+            ), dim=-1).reshape(-1, 3)  # (res^3, 3)
+
+            # Step 2: Select occupied voxels
+            occupied_indices = grid_coords[occ_grid.view(-1)]  # (N, 3)
+
+            # Step 3: Convert to world coordinates
+            aabb_min = aabb[:3]
+            aabb_max = aabb[3:]
+            voxel_size = (aabb_max - aabb_min) / res
+            occupied_centers = aabb_min + (occupied_indices + 0.5) * voxel_size  # (N, 3)
+
+            # Step 4: Convert to NumPy and visualize using trimesh + your viewer
+            occupied_cloud = trimesh.PointCloud(occupied_centers.cpu().numpy())
+            self.viewer.server.scene.add_point_cloud(
+                "/occupied_voxels",
+                points=occupied_cloud.vertices,
+                colors=np.tile((255, 0, 0), occupied_cloud.vertices.shape[0]).reshape(-1, 3),  # red color
+                point_size=0.003,
                 point_shape="circle"
             )
 

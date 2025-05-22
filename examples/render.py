@@ -51,14 +51,22 @@ class Renderer:
 
         model_state_dict = torch.load(config.get_output_path() / "model.pth", map_location=self.device)
 
-        # # TODO Code for model editing
-        # means = model_state_dict["model"]["mlp_base.encoding.means"]
+        # TODO Code for model editing
+        means = model_state_dict["model"]["mlp_base.encoding.means"]
+        # Apply sinusoidal modification to means in 100 bins along the y-axis
+        x_values = means[:, 1]  # assuming y is the second column
+        x_min, x_max = x_values.min(), x_values.max()
+        bins = np.linspace(x_min.detach().cpu().numpy(), x_max.detach().cpu().numpy(), 1001)
+        bin_indices = np.digitize(x_values.detach().cpu().numpy(), bins) - 1  # bin indices for each mean
 
-        # for mean in means:
-        #     if mean[0] > 0.5:
-        #         mean[0] += 0.1
+        # Apply sinusoidal modification based on bin index
+        for i in range(1000):
+            mask = bin_indices == i
+            if mask.any():
+                # Example: apply sin to the x coordinate (means[:, 0]) based on bin index
+                means[mask, 0] = means[mask, 0] + torch.sin(torch.tensor(i / 1000 * 2 * np.pi, device=means.device)) * 0.1
 
-        # model_state_dict["model"]["mlp_base.encoding.means"] = means
+        model_state_dict["model"]["mlp_base.encoding.means"] = means
 
         radiance_field.load_state_dict(model_state_dict['model'])
 
