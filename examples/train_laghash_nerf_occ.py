@@ -57,7 +57,7 @@ class SchedulerConfig:
 
 @dataclass
 class TrainerConfig:
-    max_steps: int = 1000
+    max_steps: int = 2000
     """Maximum number of training steps."""
     log_every: int = 200
     """Logging interval."""
@@ -237,9 +237,9 @@ class Experiment(nn.Module):
                                                        device = self.device)
         
         # Wait for the user to click the start button in viser
-        while not self.viewer.start_button.value:
-            print("Waiting for the start button to be clicked...")
-            time.sleep(1)
+        # while not self.viewer.start_button.value:
+        #     print("Waiting for the start button to be clicked...")
+        #     time.sleep(1)
 
         # training
         CONSOLE.log('Starting training')
@@ -273,7 +273,7 @@ class Experiment(nn.Module):
             )
 
             # render
-            rgb, acc, depth, kl_div, n_rendering_samples, mip_loss = render_image_with_occgrid(
+            rgb, acc, depth, kl_div, n_rendering_samples, mip_loss, weighted_squared_gausses_distance = render_image_with_occgrid(
                 self.radiance_field,
                 self.estimator,
                 rays,
@@ -306,9 +306,9 @@ class Experiment(nn.Module):
             #     if stds is not None:
             #         sigma_loss += calculate_lod_sigma_loss(resolution, stds)
             #         i += 1
-            if i > 0:
-                sigma_loss /= i
-            surf_loss = kl_div.mean()
+            # if i > 0:
+            #     sigma_loss /= i
+            # surf_loss = kl_div.mean()
 
             if self.distance_field is not None:
                 def points_to_grid_coords(points, aabb):
@@ -396,9 +396,12 @@ class Experiment(nn.Module):
                 # Sample the distance field
                 aabb = self.config.model.aabb.to(means.device)
                 distances = trilinear_interpolation(self.distance_field, means, aabb)
-                loss += distances.mean() * 1e-2
 
             loss += calculate_smooth_l1_loss(rgb, pixels)
+            if step > 500:
+                loss += weighted_squared_gausses_distance.sum() * 1e-3
+            else:
+                loss += distances.mean() * 1e-2
             if self.config.trainer.weight_surface:
                 loss += self.config.trainer.weight_surface * loss_warm_up * surf_loss
             if self.config.trainer.weight_sigma and (not self.config.model.fixed_std):

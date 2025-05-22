@@ -57,6 +57,6 @@ class NetworkwithSplashEncoding(nn.Module):
 
 
     def forward(self, coords):
-        encoding, gmm = self.encoding(coords)
+        encoding, squared_gausses_distance = self.encoding(coords)
         output = self.mlp(encoding)
-        return output, gmm
+        return output, squared_gausses_distance

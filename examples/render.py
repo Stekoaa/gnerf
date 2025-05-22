@@ -91,7 +91,7 @@ class Renderer:
         with torch.no_grad():
             for i in tqdm(range(len(test_dataset)), desc='Evaluation'):
                 render_bkgd, rays, pixels = retrieve_image_data(test_dataset[i])
-                rgb, _, _, _, _, _ = render_image_with_occgrid(
+                rgb, _, _, _, _, _, _ = render_image_with_occgrid(
                     radiance_field,
                     estimator,
                     rays,

@@ -73,7 +73,7 @@ class Viewer:
                         radiance_field.eval()
                         estimator.eval()
 
-                        rgb, _, _, _, _, _ = render_image_with_occgrid(
+                        rgb, _, _, _, _, _, _ = render_image_with_occgrid(
                             radiance_field,
                             estimator,
                             rays,

@@ -164,14 +164,14 @@ class LagHashRadianceField(torch.nn.Module):
                 },
             )
 
-    def query_density(self, x, return_feat: bool = False, return_gmm: bool = False):
+    def query_density(self, x, return_feat: bool = False, return_squared_gausses_distance: bool = False):
         if self.config.unbounded:
             x = contract_to_unisphere(x, self.config.aabb)
         else:
             aabb_min, aabb_max = torch.split(self.config.aabb, self.config.num_dim, dim=-1)
             x = (x - aabb_min) / (aabb_max - aabb_min)
         selector = ((x > 0.0) & (x < 1.0)).all(dim=-1)
-        out, gmm = self.mlp_base(x.view(-1, self.config.num_dim))
+        out, squared_gausses_distance = self.mlp_base(x.view(-1, self.config.num_dim))
         x = (
             out.view(list(x.shape[:-1]) + [1 + self.config.geo_feat_dim])
             .to(x)
@@ -185,13 +185,13 @@ class LagHashRadianceField(torch.nn.Module):
             * selector[..., None]
         )
         if return_feat:
-            if return_gmm:
-                return density, base_mlp_out, gmm
+            if return_squared_gausses_distance:
+                return density, base_mlp_out, squared_gausses_distance
             else:
                 return density, base_mlp_out
         else:
-            if return_gmm:
-                return density, gmm
+            if return_squared_gausses_distance:
+                return density, squared_gausses_distance
             else:
                 return density
 
@@ -225,8 +225,8 @@ class LagHashRadianceField(torch.nn.Module):
             if positions.shape[0] == 0:
                 density = torch.zeros(0, device=positions.device)
                 rgb = torch.zeros(0, 3, device=positions.device)
-                gmm = torch.zeros(0, 2, device=positions.device)
+                squared_gausses_distance = torch.zeros(0, 2, device=positions.device)
             else:
-                density, embedding, gmm = self.query_density(positions, return_feat=True, return_gmm=True)
+                density, embedding, squared_gausses_distance = self.query_density(positions, return_feat=True, return_squared_gausses_distance=True)
                 rgb = self._query_rgb(directions, embedding=embedding)
-        return rgb, density, gmm  # type: ignore
+        return rgb, density, squared_gausses_distance  # type: ignore
