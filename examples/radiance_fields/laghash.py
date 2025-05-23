@@ -225,7 +225,7 @@ class LagHashRadianceField(torch.nn.Module):
             if positions.shape[0] == 0:
                 density = torch.zeros(0, device=positions.device)
                 rgb = torch.zeros(0, 3, device=positions.device)
-                squared_gausses_distance = torch.zeros(0, 2, device=positions.device)
+                squared_gausses_distance = torch.zeros(0, device=positions.device)
             else:
                 density, embedding, squared_gausses_distance = self.query_density(positions, return_feat=True, return_squared_gausses_distance=True)
                 rgb = self._query_rgb(directions, embedding=embedding)

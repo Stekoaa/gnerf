@@ -187,15 +187,9 @@ class SplashEncoding(nn.Module):
         # nearest_gausses_indicies = self._get_nearest_gausses_indicies(coords, batch_size=batch_size)
         nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss(coords)
 
-        print("##########################################################################################")
-
         # Calculate squared distance between each coord and its nearest mean
         nearest_means = self.means[nearest_gausses_indicies[:, 0]]
         squared_gausses_distance = torch.sum((coords - nearest_means) ** 2, dim=1)
-
-        print(squared_gausses_distance.shape)
-
-        print("##########################################################################################")
 
         # nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss_ivf(coords)
         feats = self._calculate(coords, nearest_gausses_indicies, batch_size=batch_size)

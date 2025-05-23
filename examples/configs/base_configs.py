@@ -33,3 +33,7 @@ class BaseDataset(Dataset):
     def __init__(self, config: BaseDatasetConfig):
         super().__init__()
         self.config: BaseDatasetConfig = config
+
+    def get_weight_decay(self) -> float:
+        """Get the weight decay value."""
+        raise NotImplementedError("get_weight_decay() not implemented in BaseDataset")

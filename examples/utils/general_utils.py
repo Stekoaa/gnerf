@@ -111,3 +111,8 @@ def trilinear_interpolation(distance_field, points, aabb):
     c = c0 * (1 - dz) + c1 * dz  # (N,)
 
     return c
+
+def denormalize_points(points: torch.Tensor, aabb: torch.Tensor) -> torch.Tensor:
+    num_dim = points.shape[-1]
+    aabb_min, aabb_max = torch.split(aabb, num_dim)
+    return points * (aabb_max - aabb_min) + aabb_min

@@ -35,26 +35,10 @@ from radiance_fields.laghash import LagHashRadianceFieldConfig, LagHashRadianceF
 from pathlib import Path
 from configs.base_configs import BaseDatasetConfig, BaseDataset
 from viewer import ViewerConfig, Viewer
-from utils.general_utils import points_to_grid_coords, trilinear_interpolation
+from utils.general_utils import points_to_grid_coords, trilinear_interpolation, denormalize_points
+from optimization.optimizers import OptimizerConfig, initialize_optimizer
+from optimization.schedulers import SchedulerConfig, initialize_scheduler
 
-
-@dataclass
-class OptimizerConfig:
-    learning_rate: float = 1e-2
-    """Learning rate for the optimizer."""
-    gaussian_factor: float = 0.1
-    """Gaussian factor for the optimizer."""
-    weight_decay: float = 0.0
-    """Weight decay for the optimizer."""
-    eps: float = 1e-15
-    """Epsilon for the optimizer."""
-
-@dataclass
-class SchedulerConfig:
-    milestones: list = field(default_factory=lambda: [0.5, 0.75, 0.9])
-    """Milestones for the learning rate scheduler."""
-    gamma: float = 0.33
-    """Gamma for the learning rate scheduler."""
 
 @dataclass
 class TrainerConfig:
@@ -74,6 +58,8 @@ class TrainerConfig:
     """Size decay interval."""
     weight_surface: float = 1e-3
     """Weight for the surface loss."""
+    surface_loss_swithch_step: int = 500
+    """Step to switch to surface loss from attraction to spread on the surface."""
     weight_sigma: float = 1e-3
     """Weight for the sigma loss."""
     weight_mip: float = 1e-3
@@ -128,73 +114,6 @@ class ExperimentConfig(InstantiateConfig):
         config_yaml_path.write_text(yaml.dump(self), "utf8")
 
 
-# def get_training_params(config: ExperimentConfig):
-#     scene = config.dataset.scene
-#     if scene in TANKS_TEMPLE_SCENES:
-#         weight_decay = config.optimizer.weight_decay
-#     else:
-#         weight_decay = (
-#             1e-5 if scene in ["materials", "ficus", "drums"]
-#             else 1e-6
-#         )
-    
-#     return {
-#         "weight_decay": weight_decay,
-#     }
-
-# def get_dataset_and_scene_parameters(config: ExperimentConfig, device):
-#     scene = config.dataset.scene
-#     init_batch_size = config.dataset.init_batch_size
-    
-#     if scene in TANKS_TEMPLE_SCENES:
-#         data_path = os.path.join(config.dataset.data_root, scene)
-#         train_dataset = TanksTempleDataset(
-#             data_path, split="train", downsample=1, is_stack=False, num_rays=init_batch_size
-#         )
-#     else:
-#         train_dataset: BaseDataset = config.dataset.setup(split="train", num_rays=config.dataset.init_batch_size, device=device)
-
-#     return {
-#         "train_dataset": train_dataset, 
-#     }
-
-
-def denormalize_points(points: torch.Tensor, aabb: torch.Tensor) -> torch.Tensor:
-    num_dim = points.shape[-1]
-    aabb_min, aabb_max = torch.split(aabb, num_dim)
-    return points * (aabb_max - aabb_min) + aabb_min
-
-
-def initialize_optimizer(config: ExperimentConfig, radiance_field, weight_decay):
-    params_dict = { name : param for name, param in radiance_field.named_parameters()}
-    
-    gau_params, codebook_params, rest_params = [], [], []
-    for name in params_dict:
-        if ("means" in name) or ("stds" in name):
-            gau_params.append(params_dict[name])
-        elif "feats" in name:
-            codebook_params.append(params_dict[name])
-        else:
-            rest_params.append(params_dict[name])
-
-    gau_lr = config.optimizer.learning_rate * config.optimizer.gaussian_factor
-    params = [
-        {"params": gau_params, "lr": gau_lr, "eps": config.optimizer.eps, "weight_decay": 0.0},
-        {"params": codebook_params, "lr": config.optimizer.learning_rate, "eps": config.optimizer.eps, "weight_decay": weight_decay},
-        {"params": rest_params, "lr": config.optimizer.learning_rate, "eps": config.optimizer.eps, "weight_decay": weight_decay}
-    ]
-    
-    return torch.optim.Adam(params)
-
-def initialize_scheduler(config: ExperimentConfig, optimizer):
-    return torch.optim.lr_scheduler.ChainedScheduler(
-        [
-            torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, total_iters=100),
-            torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[int(m * config.trainer.max_steps) for m in config.scheduler.milestones], gamma=config.scheduler.gamma),
-        ]
-    )
-
-
 class Experiment(nn.Module):
 
     def __init__(self, config: ExperimentConfig):
@@ -210,13 +129,17 @@ class Experiment(nn.Module):
         os.makedirs(os.path.join(self.output_path, 'test'), exist_ok=True)
         self.config.save_config()
 
+        # Load the dataset
         if self.config.dataset.scene in TANKS_TEMPLE_SCENES or self.config.dataset.scene in NERF_SYNTHETIC_SCENES:
             train_dataset: BaseDataset = self.config.dataset.setup(split="train", num_rays=self.config.dataset.init_batch_size, device=self.device)
-            weight_decay = train_dataset.get_weight_decay()
+            weight_decay = self.config.optimizer.weight_decay
+            if self.config.optimizer.weight_decay is None:
+                weight_decay = train_dataset.get_weight_decay()
         else:
             error_message = f"Invalid scene: {self.config.dataset.scene}"
             raise ValueError(error_message)
 
+        # Prepare estimator and model
         self.estimator = OccGridEstimator(roi_aabb=self.config.model.aabb, resolution=self.config.model.grid_resolution, levels=self.config.model.grid_nlvl).to(self.device)
 
         grad_scaler = torch.cuda.amp.GradScaler(2**10)
@@ -229,6 +152,7 @@ class Experiment(nn.Module):
         optimizer = initialize_optimizer(self.config, self.radiance_field, weight_decay)
         scheduler = initialize_scheduler(self.config, optimizer)
 
+        # Initialize the viewer
         self.viewer: Viewer = self.config.viewer.setup(radiance_field = self.radiance_field, 
                                                        estimator = self.estimator, 
                                                        near_plane = self.config.dataset.near_plane, 
@@ -242,7 +166,7 @@ class Experiment(nn.Module):
         #     print("Waiting for the start button to be clicked...")
         #     time.sleep(1)
 
-        # training
+        # Training
         CONSOLE.log('Starting training')
         tic = time.time()
         self.distance_field = None
@@ -307,14 +231,12 @@ class Experiment(nn.Module):
             #     if stds is not None:
             #         sigma_loss += calculate_lod_sigma_loss(resolution, stds)
             #         i += 1
-            # if i > 0:
-            #     sigma_loss /= i
-            # surf_loss = kl_div.mean()
 
             if self.distance_field is not None:
                 # Normalize points to aabb for grid_sample
                 means = self.radiance_field.mlp_base.encoding.get_means()
                 means = denormalize_points(means, self.config.model.aabb)
+
                 # Rotate means 90 degrees around y axis
                 rot = torch.tensor([[0, 0, 1],
                                     [0, 1, 0],
@@ -328,12 +250,12 @@ class Experiment(nn.Module):
                 distances = trilinear_interpolation(self.distance_field, means, aabb)
 
             loss += calculate_smooth_l1_loss(rgb, pixels)
-            if step > 500:
-                loss += weighted_squared_gausses_distance.sum() * 1e-3
-            else:
-                loss += distances.mean() * 1e-2
             if self.config.trainer.weight_surface:
-                loss += self.config.trainer.weight_surface * loss_warm_up * surf_loss
+                if step > self.config.trainer.surface_loss_swithch_step:
+                    surf_loss = weighted_squared_gausses_distance.sum() * self.config.trainer.weight_surface
+                else:
+                    surf_loss = distances.mean() * 1e-2
+                loss += surf_loss
             if self.config.trainer.weight_sigma and (not self.config.model.fixed_std):
                 loss += self.config.trainer.weight_sigma * loss_warm_up * sigma_loss
             if self.config.trainer.weight_mip:
