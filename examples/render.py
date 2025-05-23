@@ -14,7 +14,7 @@ from typing import Type, Optional
 
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from utils.config_utils import InstantiateConfig, convert_markup_to_ansi
-from train_laghash_nerf_occ import ExperimentConfig, Experiment, OptimizerConfig, SchedulerConfig, TrainerConfig
+from examples.train import ExperimentConfig, Experiment, OptimizerConfig, SchedulerConfig, TrainerConfig
 from utils.render_utils import render_image_with_occgrid, retrieve_image_data
 from utils.metric_utils import calculate_psnr
 import trimesh
