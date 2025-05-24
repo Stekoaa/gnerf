@@ -1,17 +1,18 @@
-from typing import List
 import math
 import logging
 import numpy as np
 import faiss
 import faiss.contrib.torch_utils
 
+import time
 import torch
 import torch.nn as nn
-
-# import laghash.ops.grid as grid_ops
-from utils.general_utils import append_sys_path
-import time
 import torch.autograd.profiler as profiler
+
+from typing import Optional
+from utils.general_utils import append_sys_path
+from gnerf.lagrangian_hash.knn.knn_algorithms import BaseKNN
+
 
 append_sys_path()
 
@@ -22,13 +23,14 @@ class SplashEncoding(nn.Module):
         self,
         fixed_std: bool = False,
         decay_factor: int = 1,
-        n_neighbours: int = 5,
         n_gausses: int = 10000,
         n_features_per_gauss: int = 3,
+        knn_algorithm: Optional[BaseKNN] = None
     ):
         """
         """
         super().__init__()
+        assert knn_algorithm is not None, "KNN algorithm must be provided"
         
         self.decay_factor = decay_factor
         self.n_features_per_gauss = n_features_per_gauss
@@ -41,7 +43,7 @@ class SplashEncoding(nn.Module):
         self.means = nn.Parameter(self.means)
         if not fixed_std:
             self.stds = nn.Parameter(torch.normal(r, 2e-2, size=(self.total_gaus, 1), device='cuda'))
-        self.n_neighbours = n_neighbours
+        self.knn = knn_algorithm
     
     def init_mean(self):
         N = self.total_gaus
@@ -66,91 +68,9 @@ class SplashEncoding(nn.Module):
         means = means
         self.means = nn.Parameter(self.means)
 
+
     def get_stds(self):
         return self.stds
-    
-
-    def _get_nearest_gausses_indicies(self, coords, batch_size=1000):
-
-        n_coords = coords.shape[0]
-        nearest_indices = torch.empty((n_coords, self.n_neighbours), device=coords.device, dtype=int)
-        
-        start_time = time.time()
-        for i in range(0, n_coords, batch_size):
-            batch_coords = coords[i:i+batch_size]
-            distances = torch.cdist(batch_coords, self.means).to(device='cuda')
-            _, batch_nearest_indices = torch.topk(distances, self.n_neighbours, largest=False, sorted=False)
-            nearest_indices[i:i+batch_size] = batch_nearest_indices
-
-        torch.cuda.synchronize()
-        print(f"KNN: {time.time() - start_time:.4f} seconds")
-        
-        return nearest_indices
-
-
-    def get_nearest_gaussians_indices_faiss(self, coords: torch.Tensor):
-        """
-        FAISS KNN using full GPU path and torch.cuda.FloatTensor inputs.
-
-        Parameters:
-        - coords: (N, D) torch.cuda.FloatTensor
-
-        Returns:
-        - indices: (N, n_neighbors) torch.LongTensor
-        """
-        assert coords.shape[1] == self.means.shape[1], "Dimension mismatch"
-        assert coords.is_cuda and self.means.is_cuda, "Inputs must be on CUDA"
-
-        N, D = coords.shape
-
-        # Prepare FAISS
-        res = faiss.StandardGpuResources()
-
-        # Create CPU index and move to GPU
-        gpu_index = faiss.GpuIndexFlatL2(res, D)
-
-        # Add means directly
-        gpu_index.add(torch.tensor(self.means, device=coords.device))
-
-        # Search
-        distances, nearest_indices = gpu_index.search(coords, self.n_neighbours)
-
-        return nearest_indices
-
-
-    def get_nearest_gaussians_indices_faiss_ivf(self, coords: torch.Tensor, nlist: int = 100):
-        """
-        Efficient FAISS KNN using IVF index and optional GPU.
-
-        Parameters:
-        - coords: (N, D) torch tensor (on CPU or CUDA)
-        - nlist: number of Voronoi cells/clusters for IVF (adjust for speed/accuracy tradeoff)
-
-        Returns:
-        - nearest_indices: (N, n_neighbors) torch tensor
-        """
-        assert coords.shape[1] == self.means.shape[1], "Dimension mismatch"
-
-        N, D = coords.shape
-        M = self.means.shape[0]
-
-        # Prepare FAISS
-        res = faiss.StandardGpuResources()
-
-        # Create IVF index
-        quantizer = faiss.GpuIndexFlatL2(res, D)  # the base index for coarse quantizer
-        index_ivf = faiss.GpuIndexIVFFlat(res, quantizer, D, nlist, faiss.METRIC_L2)
-
-        # Train IVF index on means
-        train_sample = self.means[:min(10000, M)]
-        index_ivf.train(train_sample)
-        index_ivf.add(torch.tensor(self.means, device=coords.device))
-
-        # Set nprobe (number of cells to search over, higher is more accurate/slower)
-        index_ivf.nprobe = min(10, nlist)
-        distances, nearest_indices = index_ivf.search(coords, self.n_neighbours)
-
-        return nearest_indices
     
 
     def _calculate(self, coords, nearest_gausses_indicies, batch_size=1000):
@@ -184,9 +104,7 @@ class SplashEncoding(nn.Module):
         batch_size = 1000
 
         start_time = time.time()
-        # nearest_gausses_indicies = self._get_nearest_gausses_indicies(coords, batch_size=batch_size)
-        # nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss(coords)
-        nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss_ivf(coords)
+        nearest_gausses_indicies = self.knn.get_nearest_neighbours(coords, self.means)
 
         # Calculate squared distance between each coord and its nearest mean
         nearest_means = self.means[nearest_gausses_indicies[:, 0]]

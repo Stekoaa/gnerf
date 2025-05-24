@@ -1,17 +1,18 @@
 """
 Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
-from typing import Callable, List, Union
-
-import numpy as np
 import torch
+import lagrangian_hash
+import numpy as np
+
 from torch.autograd import Function
 from torch.cuda.amp import custom_bwd, custom_fwd
 from utils.config_utils import InstantiateConfig
 from dataclasses import dataclass, field
-from typing import Type
+from typing import Type, Union
 
-import lagrangian_hash
+from gnerf.lagrangian_hash.knn.knn_algorithms import BaseKNNConfig
+
 
 try:
     import tinycudann as tcnn
@@ -88,8 +89,6 @@ class LagHashRadianceFieldConfig(InstantiateConfig):
     """Whether to use unbounded coordinates."""
     use_viewdirs: bool = True
     """Whether to use view directions."""
-    n_neighbours: int = 16
-    """Number of neighbours for the hashmap."""
     n_features_per_gauss: int = 10
     """Number of features per Gaussian."""
     fixed_std: bool = False
@@ -98,6 +97,8 @@ class LagHashRadianceFieldConfig(InstantiateConfig):
     """Path to the model to load."""
     n_gausses: int = 40000
     """Number of Gaussians in the model."""
+    knn_algorithm: BaseKNNConfig = field(default_factory=BaseKNNConfig)
+    """KNN algorithm to use for nearest neighbour search."""
 
 
 class LagHashRadianceField(torch.nn.Module):
@@ -133,15 +134,16 @@ class LagHashRadianceField(torch.nn.Module):
                 },
             )
 
+        self.knn_algorithm = self.config.knn_algorithm.setup()
         self.mlp_base = lagrangian_hash.NetworkwithSplashEncoding(
             fixed_std = self.config.fixed_std,
             decay_factor=std_decay_factor,
             n_features_per_gauss=self.config.n_features_per_gauss,
-            n_neighbours=self.config.n_neighbours,
             n_gausses=self.config.n_gausses,
             output_dim=1 + self.config.geo_feat_dim,
             net_depth=1,
             net_width=64,
+            knn_algorithm=self.knn_algorithm
         )
 
         if self.config.geo_feat_dim > 0:
@@ -163,6 +165,7 @@ class LagHashRadianceField(torch.nn.Module):
                     "n_hidden_layers": 2,
                 },
             )
+
 
     def query_density(self, x, return_feat: bool = False, return_squared_gausses_distance: bool = False):
         if self.config.unbounded:

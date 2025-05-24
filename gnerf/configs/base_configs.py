@@ -3,7 +3,7 @@ from __future__ import annotations
 from torch.utils.data import Dataset
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Type
 from pathlib import Path
 
 from utils.config_utils import InstantiateConfig
@@ -11,7 +11,7 @@ from utils.config_utils import InstantiateConfig
 @dataclass
 class BaseDatasetConfig(InstantiateConfig):
 
-    _type: type = field(default_factory=lambda: BaseDataset)
+    _target: Type = field(default_factory=lambda: BaseDataset)
     """Base class for dataset configuration."""
     name: str = "Synthetic"
     """Name of the dataset."""

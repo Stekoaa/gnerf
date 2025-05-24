@@ -1,21 +1,22 @@
 """
 Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
+from __future__ import annotations
 
-import collections
-import json
 import os
-
-import imageio.v2 as imageio
-import numpy as np
+import json
 import torch
+
+import numpy as np
+import imageio.v2 as imageio
 import torch.nn.functional as F
+
 from dataclasses import dataclass, field
 from typing import Type, Literal
-from configs.base_configs import BaseDatasetConfig, BaseDataset
 from pathlib import Path
 
-from .utils import Rays
+from gnerf.datasets.utils import Rays
+from gnerf.configs.base_configs import BaseDatasetConfig, BaseDataset
 
 
 def _load_renderings(root_fp: Path, scene: str, split: str):
@@ -46,11 +47,11 @@ def _load_renderings(root_fp: Path, scene: str, split: str):
 
 
 @dataclass
-class SubjectLoaderConfig(BaseDatasetConfig):
-    """Configuration for the SubjectLoader."""
+class NeRFSyntheticDatasetConfig(BaseDatasetConfig):
+    """Configuration for the NeRFSyntheticDataset."""
 
-    _target: Type = field(default_factory=lambda: SubjectLoader)
-    """Target class for the SubjectLoader."""
+    _target: Type = field(default_factory=lambda: NeRFSyntheticDataset)
+    """Target class for the NeRFSyntheticDataset."""
     scene: Literal["chair", "drums", "ficus", "hotdog", "lego", "materials", "mic", "ship"] = "ficus"
     """Scene name."""
     width: int = 800
@@ -61,11 +62,11 @@ class SubjectLoaderConfig(BaseDatasetConfig):
     """Use OpenGL camera convention."""
 
 
-class SubjectLoader(BaseDataset):
-    """Single subject data loader for training and evaluation."""
+class NeRFSyntheticDataset(BaseDataset):
+    """Dataset for NeRF synthetic scenes."""
 
     def __init__(self, 
-                 config: SubjectLoaderConfig,
+                 config: NeRFSyntheticDatasetConfig,
                  split: Literal["train", "val", "trainval"] = "train",
                  color_bkgd_aug: str = "white",
                  num_rays: int = None,

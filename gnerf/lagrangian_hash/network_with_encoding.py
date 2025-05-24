@@ -9,6 +9,7 @@ import torch.nn.functional as F
 
 from .encoding import SplashEncoding
 from .network import Network
+from gnerf.lagrangian_hash.knn.knn_algorithms import BaseKNN
 
 try:
     import tinycudann as tcnn
@@ -26,7 +27,6 @@ class NetworkwithSplashEncoding(nn.Module):
     def __init__(
         self,
         n_features_per_gauss: int = 3,
-        n_neighbours: int = 5,
         n_gausses: int = 10000,  
         fixed_std: bool = False,
         decay_factor: int = 1,
@@ -35,12 +35,15 @@ class NetworkwithSplashEncoding(nn.Module):
         net_width: int = 64,  # The width of the MLP.
         hidden_activation: str = "ReLU",
         output_activation: str = "None",
+        knn_algorithm: Optional[BaseKNN] = None,
     ):
         super().__init__()
         
         self.encoding = SplashEncoding(fixed_std=fixed_std, 
-                                       decay_factor=decay_factor, n_neighbours=n_neighbours,
-                                       n_features_per_gauss=n_features_per_gauss, n_gausses=n_gausses)
+                                       decay_factor=decay_factor, 
+                                       n_features_per_gauss=n_features_per_gauss, 
+                                       n_gausses=n_gausses,
+                                       knn_algorithm=knn_algorithm)
         
         input_dim = n_features_per_gauss
         self.mlp = tcnn.Network(
