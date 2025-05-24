@@ -185,13 +185,13 @@ class SplashEncoding(nn.Module):
 
         start_time = time.time()
         # nearest_gausses_indicies = self._get_nearest_gausses_indicies(coords, batch_size=batch_size)
-        nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss(coords)
+        # nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss(coords)
+        nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss_ivf(coords)
 
         # Calculate squared distance between each coord and its nearest mean
         nearest_means = self.means[nearest_gausses_indicies[:, 0]]
         squared_gausses_distance = torch.sum((coords - nearest_means) ** 2, dim=1)
 
-        # nearest_gausses_indicies = self.get_nearest_gaussians_indices_faiss_ivf(coords)
         feats = self._calculate(coords, nearest_gausses_indicies, batch_size=batch_size)
         print(f"Features: {time.time() - start_time:.4f} seconds")
 
