@@ -22,7 +22,7 @@ from scipy.ndimage import distance_transform_edt
 from typing import Type, Optional
 from tqdm import tqdm
 from torch import nn
-from viewer import ViewerConfig, Viewer
+from torch.cuda.amp import GradScaler
 
 from nerfacc.estimators.occ_grid import OccGridEstimator
 
@@ -31,14 +31,66 @@ from gnerf.optimization.optimizers import OptimizerConfig, initialize_optimizer
 from gnerf.optimization.schedulers import SchedulerConfig, initialize_scheduler
 from gnerf.radiance_fields.laghash import LagHashRadianceFieldConfig, LagHashRadianceField
 from gnerf.utils.config_utils import InstantiateConfig, CONSOLE
-from gnerf.utils.general_utils import set_random_seed, TANKS_TEMPLE_SCENES, NERF_SYNTHETIC_SCENES
+from gnerf.utils.general_utils import TANKS_TEMPLE_SCENES, NERF_SYNTHETIC_SCENES
 from gnerf.utils.general_utils import points_to_grid_coords, trilinear_interpolation, denormalize_points
 from gnerf.utils.loss_utils import calculate_loss_warmup, calculate_smooth_l1_loss
 from gnerf.utils.render_utils import render_image_with_occgrid, retrieve_image_data
+from gnerf.viewer import ViewerConfig, Viewer
 
 
 @dataclass
-class TrainerConfig:
+class ExperimentConfig(InstantiateConfig):
+
+    load_config: Optional[Path] = None
+    """Path to config YAML file."""
+    dataset: BaseDatasetConfig = field(default_factory=BaseDatasetConfig)
+    """Dataset config."""
+    model: LagHashRadianceFieldConfig = field(default_factory=LagHashRadianceFieldConfig)
+    """Occupancy config."""
+    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    """Optimizer config."""
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    """Scheduler config."""
+    viewer: ViewerConfig = field(default_factory=ViewerConfig)
+    """Viewer config."""
+    output_path: Path = Path("results")
+    """Path to save the results."""
+    timestamp: Optional[str] = None
+    """Timestamp for the experiment."""
+    device: str = "cuda"
+    """Device to use for training."""
+
+    def set_timestamp(self) -> None:
+        self.timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+
+    def get_output_path(self) -> Path:
+        """Get the output path for the experiment."""
+        return self.output_path / self.dataset.scene / self.timestamp
+    
+    def save_config(self) -> None:
+        """Save config to base directory"""
+        base_dir: Path = self.get_output_path()
+        assert base_dir is not None
+        base_dir.mkdir(parents=True, exist_ok=True)
+        config_yaml_path = base_dir / "config.yml"
+        CONSOLE.log(f"Saving config to: {config_yaml_path}")
+        config_yaml_path.write_text(yaml.dump(self), "utf8")
+
+    def set_device(self, device: str) -> None:
+        """Set the device for the experiment."""
+        self.device = device
+
+
+@dataclass
+class TrainerConfig(ExperimentConfig):
+    """Configuration for the Trainer."""
+
+    _target: Type = field(default_factory=lambda: Trainer)
+    """Config class for the Experiment."""
+    random_seed: Optional[int] = None
+    """Random seed for reproducibility."""
+    pause_on_start: bool = True
+    """Pause the training until the user clicks the start button in the viewer."""
     max_steps: int = 2000
     """Maximum number of training steps."""
     log_every: int = 200
@@ -70,68 +122,23 @@ class TrainerConfig:
     alpha_thre: float = 0.0
     """Alpha threshold for rendering."""
 
-@dataclass
-class ExperimentConfig(InstantiateConfig):
 
-    _target: Type = field(default_factory=lambda: Experiment)
-    """Config class for the Experiment."""
-    load_config: Optional[Path] = None
-    """Path to config YAML file."""
-    dataset: BaseDatasetConfig = field(default_factory=BaseDatasetConfig)
-    """Dataset config."""
-    model: LagHashRadianceFieldConfig = field(default_factory=LagHashRadianceFieldConfig)
-    """Occupancy config."""
-    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
-    """Optimizer config."""
-    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
-    """Scheduler config."""
-    trainer: TrainerConfig = field(default_factory=TrainerConfig)
-    """Trainer config."""
-    viewer: ViewerConfig = field(default_factory=ViewerConfig)
-    """Viewer config."""
-    output_path: Path = Path("results")
-    """Path to save the results."""
-    timestamp: str = field(default_factory=lambda: time.strftime("%Y-%m-%d_%H-%M-%S"))
-    """Timestamp for the experiment."""
-    device: str = "cuda"
-    """Device to use for training."""
+class Trainer(nn.Module):
 
-
-    def get_output_path(self) -> Path:
-        """Get the output path for the experiment."""
-        return self.output_path / self.dataset.scene / self.timestamp
-    
-    def save_config(self) -> None:
-        """Save config to base directory"""
-        base_dir: Path = self.get_output_path()
-        assert base_dir is not None
-        base_dir.mkdir(parents=True, exist_ok=True)
-        config_yaml_path = base_dir / "config.yml"
-        CONSOLE.log(f"Saving config to: {config_yaml_path}")
-        config_yaml_path.write_text(yaml.dump(self), "utf8")
-
-
-class Experiment(nn.Module):
-
-    def __init__(self, config: ExperimentConfig):
+    def __init__(self, config: TrainerConfig):
         super().__init__()
         self.config = config
         self.device = config.device
         self.output_path = config.get_output_path()
 
-    def run(self):
-        set_random_seed(42)
-        
-        CONSOLE.log(f"Saving outputs in: {self.output_path}")
-        os.makedirs(os.path.join(self.output_path, 'test'), exist_ok=True)
-        self.config.save_config()
+    def setup(self):
 
-        # Load the dataset
+        # Setup the dataset
         if self.config.dataset.scene in TANKS_TEMPLE_SCENES or self.config.dataset.scene in NERF_SYNTHETIC_SCENES:
-            train_dataset: BaseDataset = self.config.dataset.setup(split="train", num_rays=self.config.dataset.init_batch_size, device=self.device)
+            self.train_dataset: BaseDataset = self.config.dataset.setup(split="train", num_rays=self.config.dataset.init_batch_size, device=self.device)
             weight_decay = self.config.optimizer.weight_decay
             if self.config.optimizer.weight_decay is None:
-                weight_decay = train_dataset.get_weight_decay()
+                weight_decay = self.train_dataset.get_weight_decay()
         else:
             error_message = f"Invalid scene: {self.config.dataset.scene}"
             raise ValueError(error_message)
@@ -139,35 +146,38 @@ class Experiment(nn.Module):
         # Prepare estimator and model
         self.estimator = OccGridEstimator(roi_aabb=self.config.model.aabb, resolution=self.config.model.grid_resolution, levels=self.config.model.grid_nlvl).to(self.device)
 
-        grad_scaler = torch.cuda.amp.GradScaler(2**10)
-        std_decay_factor = (self.config.trainer.std_final_factor / self.config.trainer.std_init_factor) ** (self.config.trainer.size_decay_every / self.config.trainer.max_steps)
+        self.grad_scaler = GradScaler(2**10)
+        std_decay_factor = (self.config.std_final_factor / self.config.std_init_factor) ** (self.config.size_decay_every / self.config.max_steps)
         self.radiance_field: LagHashRadianceField = self.config.model.setup(std_decay_factor=std_decay_factor, device=self.device).to(self.device)
 
         num_params = sum(p.numel() for p in self.radiance_field.parameters() if p.requires_grad)
         CONSOLE.log(f"Number of parameters: {num_params/1e6:.2f}M")
         
-        optimizer = initialize_optimizer(self.config, self.radiance_field, weight_decay)
-        scheduler = initialize_scheduler(self.config, optimizer)
+        self.optimizer = initialize_optimizer(self.config, self.radiance_field, weight_decay)
+        self.scheduler = initialize_scheduler(self.config, self.optimizer)
 
         # Initialize the viewer
         self.viewer: Viewer = self.config.viewer.setup(radiance_field = self.radiance_field, 
                                                        estimator = self.estimator, 
                                                        near_plane = self.config.dataset.near_plane, 
-                                                       render_step_size = self.config.trainer.render_step_size, 
-                                                       cone_angle = self.config.trainer.cone_angle, 
-                                                       alpha_thre = self.config.trainer.alpha_thre,
+                                                       render_step_size = self.config.render_step_size, 
+                                                       cone_angle = self.config.cone_angle, 
+                                                       alpha_thre = self.config.alpha_thre,
                                                        device = self.device)
         
         # Wait for the user to click the start button in viser
-        # while not self.viewer.start_button.value:
-        #     print("Waiting for the start button to be clicked...")
-        #     time.sleep(1)
+        if self.config.pause_on_start:
+            while not self.viewer.start_button.value:
+                print("Waiting for the start button to be clicked...")
+                time.sleep(1)
+
+    def train(self):
 
         # Training
         CONSOLE.log('Starting training')
         tic = time.time()
         self.distance_field = None
-        for step in tqdm(range(self.config.trainer.max_steps + 1), desc="Training"):
+        for step in tqdm(range(self.config.max_steps + 1), desc="Training"):
             self.radiance_field.train()
             self.estimator.train()
 
@@ -175,8 +185,8 @@ class Experiment(nn.Module):
                 print("Training_paused...")
                 time.sleep(1)
 
-            i = torch.randint(0, len(train_dataset), (1,)).item()
-            data = train_dataset[i]
+            i = torch.randint(0, len(self.train_dataset), (1,)).item()
+            data = self.train_dataset[i]
             render_bkgd, rays, pixels = retrieve_image_data(data)
 
             def occ_eval_fn(x):
@@ -185,7 +195,7 @@ class Experiment(nn.Module):
                     self.distance_field = distance_transform_edt(~self.estimator.binaries.squeeze(0).detach().cpu().numpy(), sampling=3/128)
                     self.distance_field = torch.tensor(self.distance_field, dtype=torch.float32).squeeze(0)
                     self.distance_field = self.distance_field.to(self.device)
-                return density * self.config.trainer.render_step_size
+                return density * self.config.render_step_size
 
             # update occupancy grid
             self.estimator.update_every_n_steps(
@@ -201,23 +211,23 @@ class Experiment(nn.Module):
                 rays,
                 # rendering options
                 near_plane=self.config.dataset.near_plane,
-                render_step_size=self.config.trainer.render_step_size,
+                render_step_size=self.config.render_step_size,
                 render_bkgd=render_bkgd,
-                cone_angle=self.config.trainer.cone_angle,
-                alpha_thre=self.config.trainer.alpha_thre,
+                cone_angle=self.config.cone_angle,
+                alpha_thre=self.config.alpha_thre,
             )
 
             if n_rendering_samples == 0:
                 continue
 
-            if self.config.trainer.target_sample_batch_size > 0:
+            if self.config.target_sample_batch_size > 0:
                 # dynamic batch size for rays to keep sample batch size constant.
-                num_rays = int(len(pixels) * (self.config.trainer.target_sample_batch_size / float(n_rendering_samples)))
-                train_dataset.update_num_rays(num_rays)
+                num_rays = int(len(pixels) * (self.config.target_sample_batch_size / float(n_rendering_samples)))
+                self.train_dataset.update_num_rays(num_rays)
 
             # compute loss
             loss = torch.tensor(0.0, device=self.device)
-            loss_warm_up = calculate_loss_warmup(step, self.config.trainer.max_steps)
+            loss_warm_up = calculate_loss_warmup(step, self.config.max_steps)
             mip_loss = mip_loss.mean() # distortion loss
             sigma_loss, surf_loss, i = 0, 0, 0
             
@@ -247,24 +257,23 @@ class Experiment(nn.Module):
                 distances = trilinear_interpolation(self.distance_field, means, aabb)
 
             loss += calculate_smooth_l1_loss(rgb, pixels)
-            if self.config.trainer.weight_surface:
-                if step > self.config.trainer.surface_loss_swithch_step:
-                    surf_loss = weighted_squared_gausses_distance.sum() * self.config.trainer.weight_surface
+            if self.config.weight_surface:
+                if step > self.config.surface_loss_swithch_step:
+                    surf_loss = weighted_squared_gausses_distance.sum() * self.config.weight_surface
                 else:
                     surf_loss = distances.mean() * 1e-2
                 loss += surf_loss
-            if self.config.trainer.weight_sigma and (not self.config.model.fixed_std):
-                loss += self.config.trainer.weight_sigma * loss_warm_up * sigma_loss
-            if self.config.trainer.weight_mip:
-                loss += self.config.trainer.weight_mip * mip_loss
+            if self.config.weight_sigma and (not self.config.model.fixed_std):
+                loss += self.config.weight_sigma * loss_warm_up * sigma_loss
+            if self.config.weight_mip:
+                loss += self.config.weight_mip * mip_loss
 
-            optimizer.zero_grad()
-            # do not unscale it because we are using Adam.
-            grad_scaler.scale(loss).backward()
-            optimizer.step()
-            scheduler.step()
+            self.optimizer.zero_grad()
+            self.grad_scaler.scale(loss).backward() # Do not unscale it because we are using Adam.
+            self.optimizer.step()
+            self.scheduler.step()
 
-            if step % self.config.trainer.log_every == 0:
+            if step % self.config.log_every == 0:
                 elapsed_time = time.time() - tic
                 CONSOLE.log(
                     f"Training info: "
@@ -274,15 +283,15 @@ class Experiment(nn.Module):
                     f"max_depth={depth.max():.3f} | "
                 )
             
-            if (step % self.config.trainer.size_decay_every == self.config.trainer.size_decay_every-1) and self.config.model.fixed_std:
+            if (step % self.config.size_decay_every == self.config.size_decay_every-1) and self.config.model.fixed_std:
                 self.radiance_field.mlp_base.encoding.update_factor()
 
-            if step % self.config.trainer.save_every == 0:
+            if step % self.config.save_every == 0:
                 state_dict = {
                     "steps": step,
                     "model": self.radiance_field.state_dict(),
                     "occupancy": self.estimator.state_dict(),
-                    "optimizer": optimizer.state_dict(),
+                    "optimizer": self.optimizer.state_dict(),
                 }
                 
                 model_output_path = f"{self.output_path}/model.pth"
@@ -293,7 +302,7 @@ class Experiment(nn.Module):
                 means = means.reshape(-1, means.shape[-1])
                 means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
                 if step > 0:
-                    os.remove(os.path.join(self.output_path, f'means@{step-self.config.trainer.save_every:05d}.ply'))
+                    os.remove(os.path.join(self.output_path, f'means@{step-self.config.save_every:05d}.ply'))
                 
                 means_lod_path = os.path.join(self.output_path, f'means@{step:05d}.ply')
                 means_cloud.export(means_lod_path)

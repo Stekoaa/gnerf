@@ -1,8 +1,6 @@
 import os
-import random
 import sys
 
-import numpy as np
 import torch
 
 NERF_SYNTHETIC_SCENES = [
@@ -36,11 +34,6 @@ def append_sys_path():
     home_dir = os.path.expanduser('~')
     project_root = os.path.join(home_dir, 'gnerf')
     sys.path.append(project_root)
-
-def set_random_seed(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
 
 def points_to_grid_coords(points, aabb):
     xyz_min, xyz_max = aabb[:3], aabb[3:]

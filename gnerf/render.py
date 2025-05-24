@@ -43,6 +43,9 @@ class Renderer:
         config = yaml.load(self.render_config.load_config.read_text(), Loader=yaml.Loader)
         assert isinstance(config, ExperimentConfig), "Invalid config file"
 
+        # Create output directory
+        os.makedirs(os.path.join(self.output_path, 'test'), exist_ok=True)
+
         log.info('Starting evaluation')
 
         # Load the model
