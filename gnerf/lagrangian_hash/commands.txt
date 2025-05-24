@@ -6,3 +6,34 @@ nvcc -Xcompiler -fPIC -shared kernel.cu -o lib_kernel.so --gpu-architecture=comp
 
 Python:
 python3 main.py
+
+Main:
+nvcc -o my_program main.cu KNN.cu -I/workspace/gnerf/NVIDIA-OptiX-SDK-7.6.0-linux64-x86_64/include -lcuda
+
+nvcc -Xcompiler -fPIC -c KNN.cu -o KNN.o --gpu-architecture=compute_86 --gpu-code=sm_86 -I/workspace/gnerf/NVIDIA-OptiX-SDK-7.6.0-linux64-x86_64/include -I/usr/local/cuda/include -lcuda -lcufft -D_GLIBCXX_USE_CXX11_ABI=1
+
+nvcc -shared -Xcompiler -fPIC knn_bindings.cpp KNN.o -o knn_bindings$(python3-config --extension-suffix) \
+    $(python3 -m pybind11 --includes) \
+    -I/workspace/gnerf/NVIDIA-OptiX-SDK-7.6.0-linux64-x86_64/include \
+    -I/usr/local/cuda/include \
+    -I/usr/local/lib/python3.10/dist-packages/torch/include \
+    -I/usr/local/lib/python3.10/dist-packages/torch/include/torch/csrc/api/include \
+    -L/usr/local/lib/python3.10/dist-packages/torch/lib \
+    -ltorch -ltorch_cpu -ltorch_python -lc10 -lcufft -lcuda
+
+nvcc -Xcompiler -fPIC -c KNN.cu -o KNN.o \
+  --gpu-architecture=compute_86 --gpu-code=sm_86 \
+  -I/workspace/gnerf/NVIDIA-OptiX-SDK-7.6.0-linux64-x86_64/include \
+  -I/usr/local/cuda/include \
+  -D_GLIBCXX_USE_CXX11_ABI=0
+
+g++ -shared -fPIC knn_bindings.cpp KNN.o -o knn_bindings$(python3-config --extension-suffix) \
+  -std=c++17 -D_GLIBCXX_USE_CXX11_ABI=0 \
+  $(python3 -m pybind11 --includes) \
+  -I/usr/local/cuda/include \
+  -I/workspace/gnerf/NVIDIA-OptiX-SDK-7.6.0-linux64-x86_64/include \
+  -I/usr/local/lib/python3.10/dist-packages/torch/include \
+  -I/usr/local/lib/python3.10/dist-packages/torch/include/torch/csrc/api/include \
+  -L/usr/local/lib/python3.10/dist-packages/torch/lib \
+  -ltorch -ltorch_cpu -ltorch_python -lc10 -lcufft -lcuda \
+  -Wl,-rpath=/usr/local/lib/python3.10/dist-packages/torch/lib

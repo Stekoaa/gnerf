@@ -14,7 +14,7 @@ from typing import Type, Optional
 
 from nerfacc.estimators.occ_grid import OccGridEstimator
 from utils.config_utils import InstantiateConfig, convert_markup_to_ansi
-from examples.train import ExperimentConfig, Experiment, OptimizerConfig, SchedulerConfig, TrainerConfig
+from gnerf.experiment import TrainerConfig, Trainer, OptimizerConfig, SchedulerConfig, TrainerConfig
 from utils.render_utils import render_image_with_occgrid, retrieve_image_data
 from utils.metric_utils import calculate_psnr
 import trimesh
@@ -41,7 +41,7 @@ class Renderer:
         # evaluation
         assert self.render_config.load_config is not None, "No config file provided"
         config = yaml.load(self.render_config.load_config.read_text(), Loader=yaml.Loader)
-        assert isinstance(config, ExperimentConfig), "Invalid config file"
+        assert isinstance(config, TrainerConfig), "Invalid config file"
 
         # Create output directory
         os.makedirs(os.path.join(self.output_path, 'test'), exist_ok=True)
@@ -124,9 +124,9 @@ def entrypoint():
     
     config = tyro.cli(tyro.conf.SuppressFixed[tyro.conf.FlagConversionOff[RendererConfig]], description=convert_markup_to_ansi(__doc__))
     
-    # Create an instance of the Experiment class
+    # Create an instance of the Trainer class
     renderer: Renderer = config.setup()
-    assert isinstance(renderer, Renderer), "Experiment class not found in config"
+    assert isinstance(renderer, Renderer), "Trainer class not found in config"
     renderer.render()
 
 if __name__ == "__main__":
