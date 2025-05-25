@@ -5,7 +5,7 @@ from typing import Dict, Union
 from gnerf.experiment import TrainerConfig
 from gnerf.datasets.nerf_synthetic import NeRFSyntheticDatasetConfig
 from gnerf.radiance_fields.laghash import LagHashRadianceFieldConfig
-from gnerf.lagrangian_hash.knn.knn_algorithms import TorchKNNConfig, FaissKNNConfig, FaissIVFKNNConfig
+from gnerf.lagrangian_hash.knn.knn_algorithms import TorchKNNConfig, FaissKNNConfig, FaissIVFKNNConfig, OptixKNNConfig
 
 
 method_configs: Dict[str, Union[TrainerConfig]] = {}
@@ -18,7 +18,7 @@ method_configs["gnerf"] = TrainerConfig(
     random_seed=42,
     dataset=NeRFSyntheticDatasetConfig(),
     model=LagHashRadianceFieldConfig(
-        knn_algorithm=FaissIVFKNNConfig()
+        knn_algorithm=OptixKNNConfig()
     )
 )
 

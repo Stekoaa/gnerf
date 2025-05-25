@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 import faiss
 import faiss.contrib.torch_utils
+import optix_knn
 
 from dataclasses import dataclass, field
 from utils.config_utils import InstantiateConfig
@@ -151,3 +152,52 @@ class FaissIVFKNN(BaseKNN):
         distances, nearest_indices = index_ivf.search(query, self.config.n_neighbours)
 
         return nearest_indices
+    
+
+@dataclass
+class OptixKNNConfig(BaseKNNConfig):
+
+    _target: Type = field(default_factory=lambda: OptixKNN)
+    """Configuration for OptiX KNN algorithm."""
+
+class OptixKNN(BaseKNN):
+    """KNN algorithm using OptiX."""
+
+    def __init__(self, config: OptixKNNConfig):
+        super().__init__(config)
+
+    def get_nearest_neighbours(self, query: torch.Tensor, points: torch.Tensor) -> torch.Tensor:
+        """
+        Efficient KNN using OptiX.
+
+        Parameters:
+        - query: (N, D) torch tensor (on CUDA)
+        - points: (M, D) torch tensor (on CUDA)
+
+        Returns:
+        - nearest_indices: (N, n_neighbors) torch tensor
+        """
+        assert query.shape[1] == points.shape[1], "Dimension mismatch"
+
+        # Expand points to (N, 4) by appending a column of 0.01
+        if points.shape[1] == 3:
+            pad = torch.full((points.shape[0], 1), 0.01, device=points.device, dtype=points.dtype)
+            pad_points = torch.cat([points, pad], dim=1)
+        if query.shape[1] == 3:
+            pad = torch.full((query.shape[0], 1), 0.0, device=query.device, dtype=query.dtype)
+            pad_query = torch.cat([query, pad], dim=1)
+        
+        cknn = optix_knn.S_CUDA_KNN()
+
+        success = optix_knn.CUDA_KNN_Init(11.3449, cknn)
+        success = optix_knn.CUDA_KNN_Fit(pad_points, pad_points.shape[0], cknn)
+
+        distances = torch.empty((self.config.n_neighbours, pad_query.shape[0]), dtype=torch.float32, device='cuda')
+        indices = torch.empty((self.config.n_neighbours, pad_query.shape[0]), dtype=torch.int32, device='cuda')
+
+        success = optix_knn.CUDA_KNN_KNeighbors(pad_query, self.config.n_neighbours, distances, indices, cknn)
+
+        distances = distances.T
+        indices = indices.T
+
+        return indices

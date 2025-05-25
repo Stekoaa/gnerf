@@ -33,7 +33,7 @@ extern "C" bool CUDA_KNN_Init(float chi_square_squared_radius, S_CUDA_KNN* knn) 
 
 	// *********************************************************************************************
 
-	FILE *f = fopen("/workspace/gnerf/gnerf/lagrangian_hash/knn_2/shaders.cu.ptx", "rb");
+	FILE *f = fopen("/workspace/gnerf/gnerf/lagrangian_hash/knn/shaders.cu.ptx", "rb");
 	fseek(f, 0, SEEK_END);
 	int ptxCodeSize = ftell(f);
 	fclose(f);
@@ -42,7 +42,7 @@ extern "C" bool CUDA_KNN_Init(float chi_square_squared_radius, S_CUDA_KNN* knn) 
 	char *buffer = (char *)malloc(sizeof(char) * (ptxCodeSize + 1));
 	ptxCode[0] = 0; // !!! !!! !!!
 
-	f = fopen("/workspace/gnerf/gnerf/lagrangian_hash/knn_2/shaders.cu.ptx", "rb");
+	f = fopen("/workspace/gnerf/gnerf/lagrangian_hash/knn/shaders.cu.ptx", "rb");
 	fgets(buffer, ptxCodeSize + 1, f);
 	while (!feof(f)) {
 		ptxCode = strcat(ptxCode, buffer);

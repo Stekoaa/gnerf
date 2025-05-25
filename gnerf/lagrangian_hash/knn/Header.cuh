@@ -1,231 +1,63 @@
-#define _USE_MATH_DEFINES
-
+#include "cuda.h"
 #include "cuda_runtime.h"
-#include "cufft.h"
 #include "device_launch_parameters.h"
 
 #include "optix.h"
+#include "optix_stubs.h"
 
-#include <math.h>
+#include <thrust/device_vector.h>
+#include <thrust/reduce.h>
+
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 // *** *** *** *** ***
 
-// !!! !!! !!!
-// Polygon
-//const int NUMBER_OF_VERTICES = 8;
-//const int NUMBER_OF_FACES = 6;
-
-// Icosahedron
-const int NUMBER_OF_VERTICES = 12;
-const int NUMBER_OF_FACES = 20;
-
-const double REALLOC_MULTIPLIER2 = 1.51;
-
-#define SSIM_REDUCE_MEMORY_OVERHEAD
-//#define RENDERER_OPTIX_USE_DOUBLE_PRECISION
-//#define GRADIENT_OPTIX_USE_DOUBLE_PRECISION
-//#define OPTIMIZER_OPTIX_USE_DOUBLE_PRECISION // to be implemented
-
-#ifndef RENDERER_OPTIX_USE_DOUBLE_PRECISION
-	typedef cufftReal REAL_R;
-	typedef float3 REAL3_R;
-	
-	#define EXP_R(x) expf(x)
-	#define MAD_R(x, y, z) __fmaf_rn(x, y, z)
-	#define make_REAL3_R(x, y, z) make_float3(x, y, z)
-	#define MIN_R(x, y) fminf(x, y)
-	#define MAX_R(x, y) fmaxf(x, y)
-	#define RINT_R(_X) rintf(_X)
-	#define SQRT_R(x) sqrtf(x)
-	#define TAN_R(_X) tanf(_X)
-	#define RCP_R(x) __frcp_rn(x)
-	#define COPYSIGN_R(x, y) copysignf(x, y)
-#else
-	typedef cufftDoubleReal REAL_R;
-	typedef double3 REAL3_R;
-	
-	#define EXP_R(x) exp(x)
-	#define MAD_R(x, y, z) __fma_rn(x, y, z)
-	#define make_REAL3_R(x, y, z) make_double3(x, y, z)
-	#define MIN_R(x, y) fmin(x, y)
-	#define MAX_R(x, y) fmax(x, y)
-	#define RINT_R(_X) rint(_X)
-	#define SQRT_R(x) sqrt(x)
-	#define TAN_R(_X) tan(_X)
-	#define RCP_R(x) __drcp_rn(x)
-	#define COPYSIGN_R(x, y) copysign(x, y)
-#endif
-
-#ifndef GRADIENT_OPTIX_USE_DOUBLE_PRECISION
-	typedef cufftComplex COMPLEX_G;
-	typedef cufftReal REAL_G;
-	typedef float2 REAL2_G;
-	typedef float3 REAL3_G;
-	typedef float4 REAL4_G;
-
-	#define REAL_TO_COMPLEX_G CUFFT_R2C
-	#define COMPLEX_TO_REAL_G CUFFT_C2R
-
-	#define DFFT_G(plan, idata, odata) cufftExecR2C(plan, idata, odata)
-	#define IDFFT_G(plan, idata, odata) cufftExecC2R(plan, idata, odata)
-
-	#define make_REAL3_G(x, y, z) make_float3(x, y, z)
-	#define TAN_G(_X) tanf(_X)
-	#define ABS_G(x) fabsf(x)
-	#define EXP_G(x) expf(x)
-	#define MIN_G(x, y) fminf(x, y)
-	#define MAX_G(x, y) fmaxf(x, y)
-	#define MAD_G(x, y, z) __fmaf_rn(x, y, z)
-#else
-	typedef cufftDoubleComplex COMPLEX_G;
-	typedef cufftDoubleReal REAL_G;
-	typedef double2 REAL2_G;
-	typedef double3 REAL3_G;
-	typedef double4 REAL4_G;
-
-	#define REAL_TO_COMPLEX_G CUFFT_D2Z
-	#define COMPLEX_TO_REAL_G CUFFT_Z2D
-
-	#define DFFT_G(plan, idata, odata) cufftExecD2Z(plan, idata, odata)
-	#define IDFFT_G(plan, idata, odata) cufftExecZ2D(plan, idata, odata)
-
-	#define make_REAL3_G(x, y, z) make_double3(x, y, z)
-	#define TAN_G(_X) tan(_X)
-	#define ABS_G(x) fabs(x)
-	#define EXP_G(x) exp(x)
-	#define MIN_G(x, y) fmin(x, y)
-	#define MAX_G(x, y) fmax(x, y)
-	#define MAD_G(x, y, z) __fma_rn(x, y, z)
-#endif
-// !!! !!! !!!
-
-// *** *** *** *** ***
-
-struct SGaussianComponent {
-	float mX, mY, mZ;
-
-	float qr, qi, qj, qk;
-	float sX, sY, sZ;
-};
-
-// *** *** *** *** ***
-
-struct SRenderParams {
-	int batchSize;
-	SGaussianComponent* GC;
-	int numberOfGaussians;
-	int epoch;
-};
-
-// *************************************************************************************************
-
-struct LaunchParams {
-	unsigned batch_size;
-
-	OptixTraversableHandle traversable;
-
-	float4 *GC_part_1;
-	float4 *GC_part_2;
-	float4 *GC_part_3;
-	float2 *GC_part_4;
-
-	float chi_square_squared_radius;
-
-	float max_t;
-	float max_R;
-	float *distances;
-	int *gauss_indices;
-
-	float3 *coords;
-	int coords_size;
-};
-
-// *************************************************************************************************
-
-struct SOptiXRenderParams {
-	// RENDERER
+struct S_CUDA_KNN {
 	OptixDeviceContext optixContext;
 	OptixPipeline pipeline;
-
 	OptixShaderBindingTable *sbt;
 	void *raygenRecordsBuffer;
 	void *missRecordsBuffer;
 	void *hitgroupRecordsBuffer;
-
-	int numberOfGaussians;
-
-	void *aabbBuffer;
-	void *compactedSizeBuffer;
-	void *tempBuffer;
-	unsigned long long tempBufferSize;
-	void *outputBuffer;
-	unsigned long long outputBufferSize;
-	void *asBuffer;
-	unsigned long long asBufferSize;
-
+	float chi_square_squared_radius; // !!! !!! !!!
+	float3 *gaussian_as_polygon_vertices;
+	int3 *gaussian_as_polygon_indices;
+	float4 *means; // !!! !!! !!!
+	int number_of_means; // !!! !!! !!!
+	float3 *gaussians_as_polygons_vertices;
+	int3 *gaussians_as_polygons_indices;
 	OptixTraversableHandle asHandle;
-
-	unsigned batchSize;
-
-	float4 *GC_part_1_1, *GC_part_1_2;
-	float4 *GC_part_2_1, *GC_part_2_2;
-	float4 *GC_part_3_1, *GC_part_3_2;
-	float2 *GC_part_4_1, *GC_part_4_2;
-
-	float4 *m11, *m12;
-	float4 *m21, *m22;
-	float4 *m31, *m32;
-	float2 *m41, *m42;
-
-	float4 *v11, *v12;
-	float4 *v21, *v22;
-	float4 *v31, *v32;
-	float2 *v41, *v42;
-
-	// *** *** *** *** ***
-
-	// OPTIMIZER
-	void *dL_dparams_1;
-	void *dL_dparams_2;
-	void *dL_dparams_3;
-	void *dL_dparams_4;
-	double *loss_device;
-	double loss_host;
-
-	// !!! !!! !!!
-	cufftHandle planr2c;
-	cufftHandle planc2r;
-
-	COMPLEX_G *F_1;
-	COMPLEX_G *F_2;
-	// !!! !!! !!!
-
-	// *** *** *** *** ***
-
-	bool copyBitmapToHostMemory;
-	unsigned poseNum;
-	unsigned epoch;
-	void *counter1; // !!! !!! !!!
-	void *counter2; // !!! !!! !!!
-
-	// *** *** *** *** ***
-
-	float3 *Gaussian_as_polygon_vertices;
-	int3 *Gaussian_as_polygon_indices;
-	float3 *Gaussians_as_polygon_vertices;
-	int3 *Gaussians_as_polygon_indices;
-
-	// KNN
-	float max_t;
-	float max_R;
-	float *distances;
-	float *distances_host;
-	int *gauss_indices;
-	int *gauss_indices_host;
-
-	float3 *coords;
-	int coords_size;
+	void *asBuffer;
 };
+
+// *** *** *** *** ***
+
+struct SbtRecord {
+	__align__(OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
+};
+
+// *** *** *** *** ***
+
+struct SLaunchParams {
+	OptixTraversableHandle traversable;
+	float4 *means;
+	float4 *queried_points;
+	float *distances;
+	int *indices;
+	float chi_square_squared_radius;
+	int K;
+	float max_R;
+};
+
+// *** *** *** *** ***
+
+extern "C" bool CUDA_KNN_Init(float chi_square_squared_radius, S_CUDA_KNN* knn);
+extern "C" bool CUDA_KNN_Fit(float4 *means, int number_of_means, S_CUDA_KNN* knn);
+extern "C" bool CUDA_KNN_KNeighbors(
+	float4 *queried_points,
+	int number_of_queried_points,
+	int K,
+	float *distances,
+	int *indices,
+	S_CUDA_KNN* knn
+);

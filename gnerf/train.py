@@ -11,6 +11,7 @@ import numpy as np
 home_dir = os.path.expanduser('~')
 project_root = os.path.join(home_dir, 'gnerf')
 sys.path.append(project_root)
+sys.path.append("/workspace/gnerf/gnerf/lagrangian_hash/knn")
 
 from gnerf.utils.config_utils import convert_markup_to_ansi
 from gnerf.configs.method_configs import AnnotatedBaseConfigUnion

@@ -63,7 +63,7 @@ bool py_cuda_knn_kneighbors(
     );
 }
 
-PYBIND11_MODULE(knn_bindings, m) {
+PYBIND11_MODULE(optix_knn, m) {
     py::class_<S_CUDA_KNN>(m, "S_CUDA_KNN")
         .def(py::init<>())
         // Add member bindings if needed

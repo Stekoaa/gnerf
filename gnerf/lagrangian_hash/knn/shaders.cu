@@ -1,27 +1,25 @@
-#include <optix_device.h>
-
 #include "Header.cuh"
 
 // *************************************************************************************************
 
-extern "C" __constant__ LaunchParams optixLaunchParams;
+extern "C" __constant__ SLaunchParams optixLaunchParams;
 
 // *************************************************************************************************
 
 struct SRayPayload {
-	// KNN
-	float min_distance;
 	float dist_array[1024];
 	int gauss_ind[1024];
 	int neighbors_num;
 	float max_dist_so_far;
 };
 
-extern "C" __global__ void __raygen__renderFrame() {
-	// KNN
-	int x = optixGetLaunchIndex().x;
+// *************************************************************************************************
 
-	REAL3_R v = make_REAL3_R(1.0f, 0.0f, 0.0f);
+extern "C" __global__ void __raygen__() {
+	int x = optixGetLaunchIndex().x;
+	float4 queried_point = optixLaunchParams.queried_points[x];
+	int number_of_queried_points = optixGetLaunchDimensions().x;
+	float3 v = make_float3(1.0f, 0.0f, 0.0f);
 
 	// *** *** *** *** ***
 
@@ -38,13 +36,13 @@ extern "C" __global__ void __raygen__renderFrame() {
 
 	optixTrace(
 		optixLaunchParams.traversable,
-		optixLaunchParams.coords[x],
+		make_float3(queried_point.x, queried_point.y, queried_point.z),
 		v,
 		0.0f,
 		INFINITY,
 		0.0f,
 		OptixVisibilityMask(255),
-		OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT | OPTIX_RAY_FLAG_CULL_FRONT_FACING_TRIANGLES, //OPTIX_RAY_FLAG_NONE
+		OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT | OPTIX_RAY_FLAG_CULL_FRONT_FACING_TRIANGLES,
 		0,
 		1,
 		0,
@@ -53,47 +51,47 @@ extern "C" __global__ void __raygen__renderFrame() {
 		rp_addr_hi
 	);
 
-	for (int j = 1; j < rp.neighbors_num; ++j) {
-		float dist1 = rp.dist_array[j];
-		float ind1  = rp.gauss_ind[j];
+	for (int i = 1; i < rp.neighbors_num; ++i) {
+		float dist1 = rp.dist_array[i];
+		float ind1  = rp.gauss_ind[i];
 
-		int k;
-		for (k = j; k > 0; --k) {
-			float dist2 = rp.dist_array[k - 1];
+		int j;
+		for (j = i; j > 0; --j) {
+			float dist2 = rp.dist_array[j - 1];
+			int ind2 = rp.gauss_ind[j - 1];
 
 			if (dist1 < dist2) {
-				rp.dist_array[k] = dist2;
-				rp.gauss_ind[k] = rp.gauss_ind[k - 1];
+				rp.dist_array[j] = dist2;
+				rp.gauss_ind[j] = ind2;
 			} else {
 				break;
 			}
 		}
 
-		if (k < j) {
-			rp.dist_array[k] = dist1;
-			rp.gauss_ind[k] = ind1;
+		if (j < i) {
+			rp.dist_array[j] = dist1;
+			rp.gauss_ind[j] = ind1;
 		}
 	}
 
-	if (rp.neighbors_num >= 1){
-		optixLaunchParams.distances[x] = rp.dist_array[0];
-		optixLaunchParams.gauss_indices[x] = rp.gauss_ind[0];
-	}
-	else{
-		optixLaunchParams.distances[x] = INFINITY;
-		optixLaunchParams.gauss_indices[x] = -1;
+	for (int i = 0; i < optixLaunchParams.K; ++i) {
+		if (i < rp.neighbors_num) {
+			optixLaunchParams.distances[(i * number_of_queried_points) + x] = rp.dist_array[i];
+			optixLaunchParams.indices[(i * number_of_queried_points) + x] = rp.gauss_ind[i];
+		} else {
+			optixLaunchParams.distances[(i * number_of_queried_points) + x] = -INFINITY;
+			optixLaunchParams.indices[(i * number_of_queried_points) + x] = -1;
+		}
 	}
 }
 
 // *************************************************************************************************
 
-extern "C" __global__ void __anyhit__radiance() {
-	// KNN
-	unsigned Gauss_ind = optixGetPrimitiveIndex();
-	Gauss_ind /= NUMBER_OF_FACES;
+extern "C" __global__ void __anyhit__() {
+	unsigned gauss_ind = optixGetPrimitiveIndex();
+	gauss_ind /= 20;
 
-	float4 GC_2 = optixLaunchParams.GC_part_2[Gauss_ind];
-	float4 GC_3 = optixLaunchParams.GC_part_3[Gauss_ind];
+	float4 mean = optixLaunchParams.means[gauss_ind];
 	
 	// *** *** *** *** ***
 
@@ -107,36 +105,31 @@ extern "C" __global__ void __anyhit__radiance() {
 
 	float tMin = optixGetRayTmax();
 	float3 O = optixGetObjectRayOrigin();
-	float3 d = make_float3(GC_2.x - O.x, GC_2.y - O.y, GC_2.z - O.z);
-	float max_distance = fmaxf(expf(GC_2.w), fmaxf(expf(GC_3.x), expf(GC_3.y))) * sqrtf(11.34487f);
+	float3 d = make_float3(mean.x - O.x, mean.y - O.y, mean.z - O.z);
+	float max_distance = mean.w * sqrtf(optixLaunchParams.chi_square_squared_radius);
 	float distance = sqrtf((d.x * d.x) + (d.y * d.y) + (d.z * d.z));
 	if (distance < max_distance) {
-		if (rp->neighbors_num < 16) {
+		if (rp->neighbors_num < optixLaunchParams.K) {
 			if (distance > rp->max_dist_so_far)
 				rp->max_dist_so_far = distance;
 			rp->dist_array[rp->neighbors_num] = distance;
-			rp->gauss_ind[rp->neighbors_num] = (float)Gauss_ind;
+			rp->gauss_ind[rp->neighbors_num] = gauss_ind;
 			++rp->neighbors_num;
 		} else {
 			if (distance < rp->max_dist_so_far) {
 				if (rp->neighbors_num < 1024) {
 					rp->dist_array[rp->neighbors_num] = distance;
-					rp->gauss_ind[rp->neighbors_num] = (float)Gauss_ind;
+					rp->gauss_ind[rp->neighbors_num] = gauss_ind;
 					++rp->neighbors_num;
 				}
 			}
 		}
 	}
-	if (rp->neighbors_num < 16) {
+	if (rp->neighbors_num < optixLaunchParams.K) {
 		if (tMin <= 2.0f * optixLaunchParams.max_R)
 			optixIgnoreIntersection();
 	} else {
 		if (tMin <= (2.0f * optixLaunchParams.max_R) - rp->max_dist_so_far)
 			optixIgnoreIntersection();
 	}
-}
-
-// *************************************************************************************************
-
-extern "C" __global__ void __closesthit__radiance() {
 }
