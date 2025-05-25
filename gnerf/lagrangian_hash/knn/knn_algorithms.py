@@ -166,6 +166,9 @@ class OptixKNN(BaseKNN):
     def __init__(self, config: OptixKNNConfig):
         super().__init__(config)
 
+        self.cknn = optix_knn.S_CUDA_KNN()
+        optix_knn.CUDA_KNN_Init(11.3449, self.cknn)
+
     def get_nearest_neighbours(self, query: torch.Tensor, points: torch.Tensor) -> torch.Tensor:
         """
         Efficient KNN using OptiX.
@@ -187,15 +190,12 @@ class OptixKNN(BaseKNN):
             pad = torch.full((query.shape[0], 1), 0.0, device=query.device, dtype=query.dtype)
             pad_query = torch.cat([query, pad], dim=1)
         
-        cknn = optix_knn.S_CUDA_KNN()
-
-        success = optix_knn.CUDA_KNN_Init(11.3449, cknn)
-        success = optix_knn.CUDA_KNN_Fit(pad_points, pad_points.shape[0], cknn)
+        optix_knn.CUDA_KNN_Fit(pad_points, pad_points.shape[0], self.cknn)
 
         distances = torch.empty((self.config.n_neighbours, pad_query.shape[0]), dtype=torch.float32, device='cuda')
         indices = torch.empty((self.config.n_neighbours, pad_query.shape[0]), dtype=torch.int32, device='cuda')
 
-        success = optix_knn.CUDA_KNN_KNeighbors(pad_query, self.config.n_neighbours, distances, indices, cknn)
+        optix_knn.CUDA_KNN_KNeighbors(pad_query, self.config.n_neighbours, distances, indices, self.cknn)
 
         distances = distances.T
         indices = indices.T

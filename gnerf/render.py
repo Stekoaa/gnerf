@@ -6,6 +6,9 @@ import imageio
 import torch
 import tyro
 import yaml
+import sys
+
+sys.path.append("/workspace/gnerf/gnerf/lagrangian_hash/knn")
 
 from dataclasses import dataclass, field
 from tqdm import tqdm
@@ -44,12 +47,12 @@ class Renderer:
         assert isinstance(config, TrainerConfig), "Invalid config file"
 
         # Create output directory
-        os.makedirs(os.path.join(self.output_path, 'test'), exist_ok=True)
+        os.makedirs(os.path.join(config.get_output_path(), 'test'), exist_ok=True)
 
         log.info('Starting evaluation')
 
         # Load the model
-        std_decay_factor = (config.trainer.std_final_factor / config.trainer.std_init_factor) ** (config.trainer.size_decay_every / config.trainer.max_steps)
+        std_decay_factor = (config.std_final_factor / config.std_init_factor) ** (config.size_decay_every / config.max_steps)
         radiance_field = config.model.setup(std_decay_factor=std_decay_factor, device=self.device).to(self.device)
 
         model_state_dict = torch.load(config.get_output_path() / "model.pth", map_location=self.device)
@@ -100,10 +103,10 @@ class Renderer:
                     rays,
                     # rendering options
                     near_plane=config.dataset.near_plane,
-                    render_step_size=config.trainer.render_step_size,
+                    render_step_size=config.render_step_size,
                     render_bkgd=render_bkgd,
-                    cone_angle=config.trainer.cone_angle,
-                    alpha_thre=config.trainer.alpha_thre,
+                    cone_angle=config.cone_angle,
+                    alpha_thre=config.alpha_thre,
                 )
                 
                 psnrs.append(calculate_psnr(rgb, pixels))

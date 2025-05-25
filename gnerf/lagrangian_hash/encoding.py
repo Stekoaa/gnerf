@@ -103,13 +103,13 @@ class SplashEncoding(nn.Module):
     def forward(self, coords, lod_idx=None):
         batch_size = 1000
 
-        start_time = time.time()
         nearest_gausses_indicies = self.knn.get_nearest_neighbours(coords, self.means)
 
         # Calculate squared distance between each coord and its nearest mean
         nearest_means = self.means[nearest_gausses_indicies[:, 0]]
         squared_gausses_distance = torch.sum((coords - nearest_means) ** 2, dim=1)
 
+        start_time = time.time()
         feats = self._calculate(coords, nearest_gausses_indicies, batch_size=batch_size)
         print(f"Features: {time.time() - start_time:.4f} seconds")
 

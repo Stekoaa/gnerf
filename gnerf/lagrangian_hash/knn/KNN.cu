@@ -522,9 +522,6 @@ struct SReductionOperator_float4 {
 
 // *************************************************************************************************
 
-#include <chrono>
-#include <iostream>
-
 extern "C" bool CUDA_KNN_KNeighbors(
 	float4 *queried_points,
 	int number_of_queried_points,
@@ -535,10 +532,6 @@ extern "C" bool CUDA_KNN_KNeighbors(
 ) {
 	cudaError_t error_CUDA;
 	OptixResult error_OptiX;
-
-	// Start timing
-	auto start = std::chrono::high_resolution_clock::now();
-
 	float4 max_R;
 
 	S_CUDA_KNN cknn = *knn;
@@ -591,11 +584,6 @@ extern "C" bool CUDA_KNN_KNeighbors(
 
 	error_CUDA = cudaFree(launchParamsBuffer);
 	if (error_CUDA != cudaSuccess) return false;
-
-	// End timing
-	auto end = std::chrono::high_resolution_clock::now();
-	std::chrono::duration<double> elapsed = end - start;
-	std::cout << "CUDA_KNN_KNeighbors execution time: " << elapsed.count() << " s" << std::endl;
 
 	*knn = cknn;
 
