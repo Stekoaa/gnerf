@@ -82,10 +82,6 @@ if __name__ == "__main__":
     means_torch = (torch.rand((NUMBER_OF_GAUSSIANS, 4), dtype=torch.float32, device='cuda').contiguous() * 2) - 1
     means_torch[:, 3] = 0.01
 
-    # Print first ten means
-    print("First 10 means:")
-    print(means_torch[:10].cpu().numpy())
-
     # Get pointer to the tensor's data (as void*)
     means_ptr = means_torch.data_ptr()
 
@@ -127,52 +123,12 @@ if __name__ == "__main__":
     ]
     lib_knn.CUDA_KNN_KNeighbors.restype = ctypes.c_bool
 
-    # print("######################################################################################")
-    # # Call the function
-    # start_time = time.time()
-    # status = lib_knn.CUDA_KNN_KNeighbors(
-    #     ctypes.c_void_p(queried_points_ptr),
-    #     ctypes.c_int(num_queried_points),
-    #     ctypes.c_int(K),
-    #     distances_ptr,
-    #     indices_ptr,
-    #     cknn
-    # )
-    # torch.cuda.synchronize()
-    # print(f"CUDA_KNN_KNeighbors computation time {time.time() - start_time:.4f} seconds")
-
-    # # Print first ten distances and indices for the first queried point
-    # print("First 10 distances (CUDA):", distances_torch[0].cpu().numpy())
-    # print("First 10 distances (CUDA):", distances_torch[1].cpu().numpy())
-    # print("First 10 distances (CUDA):", distances_torch[2].cpu().numpy())
-    # print("First 10 distances (CUDA):", distances_torch[3].cpu().numpy())
-    # print("First 10 distances (CUDA):", distances_torch[4].cpu().numpy())
-    # print("First 10 indices (CUDA):", indices_torch[0].cpu().numpy())
-    # print("First 10 indices (CUDA):", indices_torch[1].cpu().numpy())
-    # print("First 10 indices (CUDA):", indices_torch[2].cpu().numpy())
-    # print("First 10 indices (CUDA):", indices_torch[3].cpu().numpy())
-    # print("First 10 indices (CUDA):", indices_torch[4].cpu().numpy())
-    # print("######################################################################################")
-
     # Compute ground truth using torch.cdist and topk
     start_time = time.time()
     dists = torch.cdist(queried_points_torch[:, :3], means_torch[:, :3])  # Only use x, y, z for distance
     gt_dists, gt_indices = torch.topk(dists, K, largest=False, dim=1)
     torch.cuda.synchronize()
     print(f"Ground truth computation took {time.time() - start_time:.4f} seconds")
-
-    # Print first ten distances and indices for the ground truth
-    print("Ground truth first 10 distances:", gt_dists[0].cpu().numpy())
-    print("Ground truth first 10 distances:", gt_dists[1].cpu().numpy())
-    print("Ground truth first 10 distances:", gt_dists[2].cpu().numpy())
-    print("Ground truth first 10 distances:", gt_dists[3].cpu().numpy())
-    print("Ground truth first 10 distances:", gt_dists[4].cpu().numpy())
-    print("Ground truth first 10 indices:", gt_indices[0].cpu().numpy())
-    print("Ground truth first 10 indices:", gt_indices[1].cpu().numpy())
-    print("Ground truth first 10 indices:", gt_indices[2].cpu().numpy())
-    print("Ground truth first 10 indices:", gt_indices[3].cpu().numpy())
-    print("Ground truth first 10 indices:", gt_indices[4].cpu().numpy())
-    print("######################################################################################")
 
     import knn_bindings
 
@@ -187,12 +143,12 @@ if __name__ == "__main__":
 
     print(f"CUDA_KNN_Fit: {success}")
 
-    distances = torch.empty((NUMBER_OF_POINTS, K), dtype=torch.float32, device='cuda')
-    indices = torch.empty((NUMBER_OF_POINTS, K), dtype=torch.int32, device='cuda')
+    distances = torch.empty((K, NUMBER_OF_POINTS), dtype=torch.float32, device='cuda')
+    indices = torch.empty((K, NUMBER_OF_POINTS), dtype=torch.int32, device='cuda')
 
     success = knn_bindings.CUDA_KNN_KNeighbors(queried_points_torch, K, distances, indices, cknn)
 
-    print(f"CUDA_KNN_KNeighbors: {success}")
+    distances = distances.T
+    indices = indices.T
 
-    print("First 10 distances (CUDA):", distances[0].cpu().numpy())
-    print("First 10 indices (CUDA):", indices[0].cpu().numpy())
+    print(f"CUDA_KNN_KNeighbors: {success}")

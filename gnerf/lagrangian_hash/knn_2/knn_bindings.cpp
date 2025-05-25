@@ -44,8 +44,8 @@ bool py_cuda_knn_kneighbors(
         throw std::runtime_error("indices must be contiguous int32 CUDA tensor");
     if (distances.sizes() != indices.sizes())
         throw std::runtime_error("distances and indices must have the same shape");
-    if (distances.size(0) != queried_points.size(0) || distances.size(1) != K)
-        throw std::runtime_error("distances/indices must have shape (N, K)");
+    if (distances.size(0) != K || distances.size(1) != queried_points.size(0))
+        throw std::runtime_error("distances/indices must have shape (K, N)");
 
     int N = queried_points.size(0);
 
