@@ -12,3 +12,5 @@ kornia
 trimesh
 hydra-core
 torchmetrics
+tyro
+viser
