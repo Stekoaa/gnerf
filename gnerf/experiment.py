@@ -53,6 +53,8 @@ class ExperimentConfig(InstantiateConfig):
     """Scheduler config."""
     viewer: ViewerConfig = field(default_factory=ViewerConfig)
     """Viewer config."""
+    use_viewer: bool = True
+    """Whether to use the viewer."""
     output_path: Path = Path("results")
     """Path to save the results."""
     timestamp: Optional[str] = None
@@ -157,19 +159,20 @@ class Trainer(nn.Module):
         self.scheduler = initialize_scheduler(self.config, self.optimizer)
 
         # Initialize the viewer
-        self.viewer: Viewer = self.config.viewer.setup(radiance_field = self.radiance_field, 
-                                                       estimator = self.estimator, 
-                                                       near_plane = self.config.dataset.near_plane, 
-                                                       render_step_size = self.config.render_step_size, 
-                                                       cone_angle = self.config.cone_angle, 
-                                                       alpha_thre = self.config.alpha_thre,
-                                                       device = self.device)
-        
-        # Wait for the user to click the start button in viser
-        if self.config.pause_on_start:
-            while not self.viewer.start_button.value:
-                print("Waiting for the start button to be clicked...")
-                time.sleep(1)
+        if self.config.use_viewer:
+            self.viewer: Viewer = self.config.viewer.setup(radiance_field = self.radiance_field, 
+                                                        estimator = self.estimator, 
+                                                        near_plane = self.config.dataset.near_plane, 
+                                                        render_step_size = self.config.render_step_size, 
+                                                        cone_angle = self.config.cone_angle, 
+                                                        alpha_thre = self.config.alpha_thre,
+                                                        device = self.device)
+            
+            # Wait for the user to click the start button in viser
+            if self.config.pause_on_start:
+                while not self.viewer.start_button.value:
+                    print("Waiting for the start button to be clicked...")
+                    time.sleep(1)
 
     def train(self):
 
@@ -181,9 +184,10 @@ class Trainer(nn.Module):
             self.radiance_field.train()
             self.estimator.train()
 
-            while self.viewer.pause_training:
-                print("Training_paused...")
-                time.sleep(1)
+            if self.config.use_viewer:
+                while self.viewer.pause_training:
+                    print("Training_paused...")
+                    time.sleep(1)
 
             i = torch.randint(0, len(self.train_dataset), (1,)).item()
             data = self.train_dataset[i]
@@ -309,49 +313,11 @@ class Trainer(nn.Module):
                 CONSOLE.log(f"Means saved to {means_lod_path}")
 
             means = self.radiance_field.mlp_base.encoding.get_means()
-            means = denormalize_points(means, self.config.model.aabb)
 
-            means = means.reshape(-1, means.shape[-1])
-            means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
+            if self.config.use_viewer:
+                self.viewer.display_means(means, aabb)
 
-            color_coeffs = np.random.uniform(0.4, 1.0, size=(means_cloud.vertices.shape[0]))
-            self.viewer.server.scene.add_point_cloud(
-                "/means",
-                points=means_cloud.vertices,
-                colors=np.tile((0, 0, 255), means_cloud.vertices.shape[0]).reshape(-1, 3) * color_coeffs[:, None],
-                point_size=0.002,
-                point_shape="circle"
-            )
+                occ_grid = self.estimator.binaries.bool().squeeze(0)
+                self.viewer.display_occupancy_grid(occ_grid, aabb)
 
-            # Step 1: Generate voxel grid indices
-            occ_grid = self.estimator.binaries.bool().squeeze(0)
-            res = occ_grid.shape[0]
-            device = occ_grid.device
-
-            grid_coords = torch.stack(torch.meshgrid(
-                torch.arange(res, device=device),
-                torch.arange(res, device=device),
-                torch.arange(res, device=device),
-                indexing='ij'
-            ), dim=-1).reshape(-1, 3)  # (res^3, 3)
-
-            # Step 2: Select occupied voxels
-            occupied_indices = grid_coords[occ_grid.view(-1)]  # (N, 3)
-
-            # Step 3: Convert to world coordinates
-            aabb_min = aabb[:3]
-            aabb_max = aabb[3:]
-            voxel_size = (aabb_max - aabb_min) / res
-            occupied_centers = aabb_min + (occupied_indices + 0.5) * voxel_size  # (N, 3)
-
-            # Step 4: Convert to NumPy and visualize using trimesh + your viewer
-            occupied_cloud = trimesh.PointCloud(occupied_centers.cpu().numpy())
-            self.viewer.server.scene.add_point_cloud(
-                "/occupied_voxels",
-                points=occupied_cloud.vertices,
-                colors=np.tile((255, 0, 0), occupied_cloud.vertices.shape[0]).reshape(-1, 3),  # red color
-                point_size=0.003,
-                point_shape="circle"
-            )
-
-            self.viewer.ready = True
+                self.viewer.ready = True

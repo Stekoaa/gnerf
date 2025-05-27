@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import viser
 import torch
+import trimesh
 import numpy as np
 import viser.transforms as vtf
 import torch.nn.functional as F
@@ -9,10 +10,10 @@ import torch.nn.functional as F
 from dataclasses import dataclass, field
 from typing import Type
 
-from datasets.utils import Rays
-from utils.config_utils import InstantiateConfig
-from utils.render_utils import render_image_with_occgrid
-
+from gnerf.datasets.utils import Rays
+from gnerf.utils.config_utils import InstantiateConfig
+from gnerf.utils.render_utils import render_image_with_occgrid
+from gnerf.utils.general_utils import denormalize_points
 
 @dataclass
 class ViewerConfig(InstantiateConfig):
@@ -151,3 +152,58 @@ class Viewer:
         viewdirs = torch.reshape(viewdirs, (width, height, 3))
 
         return Rays(origins=origins, viewdirs=viewdirs)
+    
+
+    def display_means(self, means: torch.Tensor, aabb: torch.Tensor) -> None:
+        """
+        Display the means in the viewer.
+        """
+        means = denormalize_points(means, aabb)
+
+        means = means.reshape(-1, means.shape[-1])
+        means_cloud = trimesh.PointCloud(means.cpu().detach().numpy())
+
+        color_coeffs = np.random.uniform(0.4, 1.0, size=(means_cloud.vertices.shape[0]))
+        self.server.scene.add_point_cloud(
+            "/means",
+            points=means_cloud.vertices,
+            colors=np.tile((0, 0, 255), means_cloud.vertices.shape[0]).reshape(-1, 3) * color_coeffs[:, None],
+            point_size=0.002,
+            point_shape="circle"
+        )
+
+    
+    def display_occupancy_grid(self, occ_grid: torch.Tensor, aabb: torch.Tensor) -> None:
+        """
+        Display the occupancy grid in the viewer.
+        """
+        # Generate voxel grid indices
+        res = occ_grid.shape[0]
+        device = occ_grid.device
+
+        grid_coords = torch.stack(torch.meshgrid(
+            torch.arange(res, device=device),
+            torch.arange(res, device=device),
+            torch.arange(res, device=device),
+            indexing='ij'
+        ), dim=-1).reshape(-1, 3)  # (res^3, 3)
+
+        # Select occupied voxels
+        occupied_indices = grid_coords[occ_grid.view(-1)]  # (N, 3)
+
+        # Convert to world coordinates
+        aabb_min = aabb[:3]
+        aabb_max = aabb[3:]
+        voxel_size = (aabb_max - aabb_min) / res
+        occupied_centers = aabb_min + (occupied_indices + 0.5) * voxel_size  # (N, 3)
+
+        # Convert to NumPy and visualize using trimesh + your viewer
+        occupied_cloud = trimesh.PointCloud(occupied_centers.cpu().numpy())
+        self.server.scene.add_point_cloud(
+            "/occupied_voxels",
+            points=occupied_cloud.vertices,
+            colors=np.tile((255, 0, 0), occupied_cloud.vertices.shape[0]).reshape(-1, 3),  # red color
+            point_size=0.003,
+            point_shape="circle",
+            visible=False
+        )

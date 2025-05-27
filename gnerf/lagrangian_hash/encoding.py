@@ -41,6 +41,7 @@ class SplashEncoding(nn.Module):
         self.feats = nn.Parameter(self.feats)
         self.init_mean()
         self.means = nn.Parameter(self.means)
+        self.gaussian_constant = torch.sqrt(torch.tensor(2 * torch.pi, device='cuda'))
         if not fixed_std:
             self.stds = nn.Parameter(torch.normal(r, 2e-2, size=(self.total_gaus, 1), device='cuda'))
         self.knn = knn_algorithm
@@ -73,24 +74,20 @@ class SplashEncoding(nn.Module):
         return self.stds
     
 
-    def _calculate(self, coords, nearest_gausses_indicies, batch_size=1000):
+    def _calculate(self, coords, nearest_gausses_indicies, sq_dists, batch_size=1000):
         num_coords = coords.shape[0]
         feature_dim = self.feats.shape[1]
 
         feature_vector = torch.zeros((num_coords, feature_dim), device=coords.device)
 
         for i in range(0, num_coords, batch_size):
-            batch_coords = coords[i : i + batch_size]  # [batch_size, 3]
             batch_indices = nearest_gausses_indicies[i : i + batch_size]  # [batch_size, num_nearest]
+            sq_dist = sq_dists[i : i + batch_size, :, None]  # [batch_size, num_nearest]
 
             nearest_features = self.feats[batch_indices]  # [batch_size, num_nearest, feature_dim]
 
-            diff = batch_coords[:, None, :] - self.means[batch_indices]  # [batch_size, num_nearest, 3]
-            sq_dist = torch.sum(diff ** 2, dim=-1, keepdim=True)  # [batch_size, num_nearest, 1]
-
-            stds = torch.abs(self.stds[batch_indices])  # [batch_size, num_nearest]
-            gaussian_constant = torch.sqrt(torch.tensor(2 * torch.pi, device=coords.device))
-            gau_weights = torch.exp(-sq_dist / (2 * stds ** 2)) / (gaussian_constant * stds + 1e-7)  # [batch_size, num_nearest, 1]
+            stds = torch.square(self.stds[batch_indices])  # [batch_size, num_nearest]
+            gau_weights = torch.exp(-sq_dist / (2 * stds)) / (self.gaussian_constant * torch.sqrt(stds) + 1e-7)  # [batch_size, num_nearest, 1]
 
             weighted_features = nearest_features * gau_weights  # [batch_size, num_nearest, feature_dim]
             batch_feature_vector = torch.sum(weighted_features, dim=1)  # [batch_size, feature_dim]
@@ -101,17 +98,17 @@ class SplashEncoding(nn.Module):
         
 
     def forward(self, coords, lod_idx=None):
-        batch_size = 1000
+        batch_size = 5000000
 
         nearest_gausses_indicies = self.knn.get_nearest_neighbours(coords, self.means)
 
         # Calculate squared distance between each coord and its nearest mean
-        nearest_means = self.means[nearest_gausses_indicies[:, 0]]
-        squared_gausses_distance = torch.sum((coords - nearest_means) ** 2, dim=1)
+        nearest_means = self.means[nearest_gausses_indicies]
+        squared_gausses_distance = torch.sum((coords[:, None, :] - nearest_means) ** 2, dim=-1)
 
         start_time = time.time()
-        feats = self._calculate(coords, nearest_gausses_indicies, batch_size=batch_size)
+        feats = self._calculate(coords, nearest_gausses_indicies, squared_gausses_distance, batch_size=batch_size)
         print(f"Features: {time.time() - start_time:.4f} seconds")
 
-        return feats, squared_gausses_distance
+        return feats, squared_gausses_distance[:, 0]
     
