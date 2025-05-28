@@ -1,31 +1,27 @@
 """
 Copyright (c) 2022 Ruilong Li, UC Berkeley.
 """
+from __future__ import annotations
 
-import collections
-import json
 import os
-
-import imageio.v2 as imageio
-import numpy as np
+import json
 import torch
+
+import numpy as np
+import imageio.v2 as imageio
 import torch.nn.functional as F
 
-from .utils import Rays
+from dataclasses import dataclass, field
+from typing import Type, Literal
+from pathlib import Path
+
+from gnerf.datasets.utils import Rays
+from gnerf.configs.base_configs import BaseDatasetConfig, BaseDataset
 
 
-def _load_renderings(root_fp: str, subject_id: str, split: str):
+def _load_renderings(root_fp: Path, scene: str, split: str):
     """Load images from disk."""
-    if not root_fp.startswith("/"):
-        # allow relative path. e.g., "./data/nerf_synthetic/"
-        root_fp = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "..",
-            "..",
-            root_fp,
-        )
-
-    data_dir = os.path.join(root_fp, subject_id)
+    data_dir = root_fp / scene
     with open(
         os.path.join(data_dir, "transforms_{}.json".format(split)), "r"
     ) as fp:
@@ -50,45 +46,37 @@ def _load_renderings(root_fp: str, subject_id: str, split: str):
     return images, camtoworlds, focal
 
 
-class SubjectLoader(torch.utils.data.Dataset):
-    """Single subject data loader for training and evaluation."""
+@dataclass
+class NeRFSyntheticDatasetConfig(BaseDatasetConfig):
+    """Configuration for the NeRFSyntheticDataset."""
 
-    SPLITS = ["train", "val", "trainval", "test"]
-    SUBJECT_IDS = [
-        "chair",
-        "drums",
-        "ficus",
-        "hotdog",
-        "lego",
-        "materials",
-        "mic",
-        "ship",
-    ]
+    _target: Type = field(default_factory=lambda: NeRFSyntheticDataset)
+    """Target class for the NeRFSyntheticDataset."""
+    scene: Literal["chair", "drums", "ficus", "hotdog", "lego", "materials", "mic", "ship"] = "ficus"
+    """Scene name."""
+    width: int = 800
+    """Width of the images."""
+    height: int = 800
+    """Height of the images."""
+    opengl_camera: bool = True
+    """Use OpenGL camera convention."""
 
-    WIDTH, HEIGHT = 800, 800
-    NEAR, FAR = 2.0, 6.0
-    OPENGL_CAMERA = True
 
-    def __init__(
-        self,
-        subject_id: str,
-        root_fp: str,
-        split: str,
-        color_bkgd_aug: str = "white",
-        num_rays: int = None,
-        near: float = None,
-        far: float = None,
-        batch_over_images: bool = True,
-        device: torch.device = torch.device("cpu"),
-    ):
-        super().__init__()
-        assert split in self.SPLITS, "%s" % split
-        assert subject_id in self.SUBJECT_IDS, "%s" % subject_id
+class NeRFSyntheticDataset(BaseDataset):
+    """Dataset for NeRF synthetic scenes."""
+
+    def __init__(self, 
+                 config: NeRFSyntheticDatasetConfig,
+                 split: Literal["train", "val", "trainval"] = "train",
+                 color_bkgd_aug: str = "white",
+                 num_rays: int = None,
+                 batch_over_images: bool = True,
+                 device: torch.device = torch.device("cpu")
+                ):
+        super().__init__(config)
+
         assert color_bkgd_aug in ["white", "black", "random"]
-        self.split = split
         self.num_rays = num_rays
-        self.near = self.NEAR if near is None else near
-        self.far = self.FAR if far is None else far
         self.training = (num_rays is not None) and (
             split in ["train", "trainval"]
         )
@@ -96,10 +84,10 @@ class SubjectLoader(torch.utils.data.Dataset):
         self.batch_over_images = batch_over_images
         if split == "trainval":
             _images_train, _camtoworlds_train, _focal_train = _load_renderings(
-                root_fp, subject_id, "train"
+                self.config.data_root, self.config.scene, "train"
             )
             _images_val, _camtoworlds_val, _focal_val = _load_renderings(
-                root_fp, subject_id, "val"
+                self.config.data_root, self.config.scene, "val"
             )
             self.images = np.concatenate([_images_train, _images_val])
             self.camtoworlds = np.concatenate(
@@ -108,14 +96,14 @@ class SubjectLoader(torch.utils.data.Dataset):
             self.focal = _focal_train
         else:
             self.images, self.camtoworlds, self.focal = _load_renderings(
-                root_fp, subject_id, split
+                self.config.data_root, self.config.scene, split
             )
         self.images = torch.from_numpy(self.images).to(torch.uint8)
         self.camtoworlds = torch.from_numpy(self.camtoworlds).to(torch.float32)
         self.K = torch.tensor(
             [
-                [self.focal, 0, self.WIDTH / 2.0],
-                [0, self.focal, self.HEIGHT / 2.0],
+                [self.focal, 0, self.config.width / 2.0],
+                [0, self.focal, self.config.height / 2.0],
                 [0, 0, 1],
             ],
             dtype=torch.float32,
@@ -123,7 +111,7 @@ class SubjectLoader(torch.utils.data.Dataset):
         self.images = self.images.to(device)
         self.camtoworlds = self.camtoworlds.to(device)
         self.K = self.K.to(device)
-        assert self.images.shape[1:3] == (self.HEIGHT, self.WIDTH)
+        assert self.images.shape[1:3] == (self.config.height, self.config.width)
         self.g = torch.Generator(device=device)
         self.g.manual_seed(42)
 
@@ -182,14 +170,14 @@ class SubjectLoader(torch.utils.data.Dataset):
                 image_id = [index] * num_rays
             x = torch.randint(
                 0,
-                self.WIDTH,
+                self.config.width,
                 size=(num_rays,),
                 device=self.images.device,
                 generator=self.g,
             )
             y = torch.randint(
                 0,
-                self.HEIGHT,
+                self.config.height,
                 size=(num_rays,),
                 device=self.images.device,
                 generator=self.g,
@@ -197,8 +185,8 @@ class SubjectLoader(torch.utils.data.Dataset):
         else:
             image_id = [index]
             x, y = torch.meshgrid(
-                torch.arange(self.WIDTH, device=self.images.device),
-                torch.arange(self.HEIGHT, device=self.images.device),
+                torch.arange(self.config.width, device=self.images.device),
+                torch.arange(self.config.height, device=self.images.device),
                 indexing="xy",
             )
             x = x.flatten()
@@ -213,12 +201,12 @@ class SubjectLoader(torch.utils.data.Dataset):
                     (x - self.K[0, 2] + 0.5) / self.K[0, 0],
                     (y - self.K[1, 2] + 0.5)
                     / self.K[1, 1]
-                    * (-1.0 if self.OPENGL_CAMERA else 1.0),
+                    * (-1.0 if self.config.opengl_camera else 1.0),
                 ],
                 dim=-1,
             ),
             (0, 1),
-            value=(-1.0 if self.OPENGL_CAMERA else 1.0),
+            value=(-1.0 if self.config.opengl_camera else 1.0),
         )  # [num_rays, 3]
 
         # [n_cams, height, width, 3]
@@ -233,9 +221,9 @@ class SubjectLoader(torch.utils.data.Dataset):
             viewdirs = torch.reshape(viewdirs, (num_rays, 3))
             rgba = torch.reshape(rgba, (num_rays, 4))
         else:
-            origins = torch.reshape(origins, (self.HEIGHT, self.WIDTH, 3))
-            viewdirs = torch.reshape(viewdirs, (self.HEIGHT, self.WIDTH, 3))
-            rgba = torch.reshape(rgba, (self.HEIGHT, self.WIDTH, 4))
+            origins = torch.reshape(origins, (self.config.height, self.config.width, 3))
+            viewdirs = torch.reshape(viewdirs, (self.config.height, self.config.width, 3))
+            rgba = torch.reshape(rgba, (self.config.height, self.config.width, 4))
 
         rays = Rays(origins=origins, viewdirs=viewdirs)
 
@@ -243,3 +231,13 @@ class SubjectLoader(torch.utils.data.Dataset):
             "rgba": rgba,  # [h, w, 4] or [num_rays, 4]
             "rays": rays,  # [h, w, 3] or [num_rays, 3]
         }
+    
+    def get_weight_decay(self) -> float:
+        """Get the weight decay for the dataset."""
+        
+        weight_decay = (
+            1e-5 if self.config.scene in ["materials", "ficus", "drums"]
+            else 1e-6
+        )
+
+        return weight_decay

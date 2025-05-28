@@ -209,6 +209,10 @@ class TanksTempleDataset(Dataset):
     def update_num_rays(self, num_rays):
         self.num_rays = num_rays
 
+    def get_weight_decay(self):
+        """Get the weight decay for the dataset."""
+        return 0.0
+
     def __getitem__(self, idx):
 
         if self.split == 'train':  # use data in the buffers

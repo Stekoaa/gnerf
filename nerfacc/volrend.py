@@ -89,7 +89,7 @@ def rendering(
 
     # Query sigma/alpha and color with gradients
     if rgb_sigma_fn is not None:
-        rgbs, sigmas, gmm = rgb_sigma_fn(t_starts, t_ends, ray_indices)
+        rgbs, sigmas, squared_gausses_distance = rgb_sigma_fn(t_starts, t_ends, ray_indices)
         # if t_starts.shape[0] != 0:
         #     rgbs, sigmas = rgb_sigma_fn(t_starts, t_ends, ray_indices)
         # else:
@@ -109,8 +109,9 @@ def rendering(
             ray_indices=ray_indices,
             n_rays=n_rays,
         )
+
         extras = {
-            "gmm": gmm,
+            "weighted_squared_gausses_distance": squared_gausses_distance * weights,
             "weights": weights,
             "alphas": alphas,
             "trans": trans,
@@ -119,11 +120,6 @@ def rendering(
         }
     elif rgb_alpha_fn is not None:
         rgbs, alphas = rgb_alpha_fn(t_starts, t_ends, ray_indices)
-        # if t_starts.shape[0] != 0:
-        #     rgbs, alphas = rgb_alpha_fn(t_starts, t_ends, ray_indices)
-        # else:
-        #     rgbs = torch.empty((0, 3), device=t_starts.device)
-        #     alphas = torch.empty((0,), device=t_starts.device)
         assert rgbs.shape[-1] == 3, "rgbs must have 3 channels, got {}".format(
             rgbs.shape
         )
@@ -159,7 +155,6 @@ def rendering(
     if expected_depths:
         depths = depths / opacities.clamp_min(torch.finfo(rgbs.dtype).eps)
 
-    # gmm_deltas = gmm * (t_ends - t_starts)[..., None]
     bin_entropys = weights[..., None].detach()
     kl_divs = accumulate_along_rays(
         torch.ones_like(weights), values=bin_entropys, ray_indices=ray_indices, n_rays=n_rays

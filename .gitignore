@@ -123,12 +123,15 @@ venv.bak/
 # vscode
 .vsocde
 
-_results*/
+results*/
 _log*/
 outputs/
 data/
 not_needed/
 *.mp4
+
+# OptiX SDK
+NVIDIA-OptiX-SDK-7.6.0-linux64-x86_64
 
 benchmarks/*
 !benchmarks/barf

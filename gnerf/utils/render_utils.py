@@ -23,6 +23,14 @@ from nerfacc.volrend import (
 )
 from nerfacc.losses import distortion
 
+
+def retrieve_image_data(img):
+    render_bkgd = img["color_bkgd"]
+    rays = img["rays"]
+    pixels = img["pixels"]
+    return render_bkgd, rays, pixels
+
+
 def render_image_with_occgrid(
     # scene
     radiance_field: torch.nn.Module,
@@ -36,7 +44,7 @@ def render_image_with_occgrid(
     cone_angle: float = 0.0,
     alpha_thre: float = 0.0,
     # test options
-    test_chunk_size: int = 81920,
+    test_chunk_size: int = int(81920 / 2),
     # only useful for dnerf
     timestamps: Optional[torch.Tensor] = None,
 ):
@@ -67,15 +75,6 @@ def render_image_with_occgrid(
             t_origins = rays_o[ray_indices]
             t_dirs = rays_d[ray_indices]
             positions = t_origins + t_dirs * (t_starts + t_ends)[:, None] / 2.0
-            # if timestamps is not None:
-            #     # dnerf
-            #     t = (
-            #         timestamps[ray_indices]
-            #         if radiance_field.training
-            #         else timestamps.expand_as(positions[:, :1])
-            #     )
-            #     sigmas = radiance_field.query_density(positions, t)
-            # else:
             sigmas = radiance_field.query_density(positions)
             return sigmas.squeeze(-1)
 
@@ -83,17 +82,8 @@ def render_image_with_occgrid(
             t_origins = rays_o[ray_indices]
             t_dirs = rays_d[ray_indices]
             positions = t_origins + t_dirs * (t_starts + t_ends)[:, None] / 2.0
-            # if timestamps is not None:
-            #     # dnerf
-            #     t = (
-            #         timestamps[ray_indices]
-            #         if radiance_field.training
-            #         else timestamps.expand_as(positions[:, :1])
-            #     )
-            #     rgbs, sigmas = radiance_field(positions, t, t_dirs)
-            # else:
-            rgbs, sigmas, gmm = radiance_field(positions, t_dirs)
-            return rgbs, sigmas.squeeze(-1), gmm
+            rgbs, sigmas, squared_gausses_distance = radiance_field(positions, t_dirs)
+            return rgbs, sigmas.squeeze(-1), squared_gausses_distance
 
         ray_indices, t_starts, t_ends = estimator.sampling(
             rays_o,
@@ -116,8 +106,8 @@ def render_image_with_occgrid(
         )
         
         weights = extras['weights']
+        weighted_squared_gausses_distance = extras['weighted_squared_gausses_distance']
         n_rays = rays_o.shape[0]
-        # n_samples = weights.shape[1]
         
         mip_loss = distortion(
              weights=weights.view(-1),
@@ -127,15 +117,9 @@ def render_image_with_occgrid(
              n_rays=n_rays,
          )
         
-        # mip_loss = distortion_loss(
-        #     weights=weights,
-        #     t_starts=t_starts,
-        #     t_ends=t_ends,
-        # )
-        
-        chunk_results = [rgb, opacity, depth, entropy, len(t_starts), mip_loss]
+        chunk_results = [rgb, opacity, depth, entropy, len(t_starts), mip_loss, weighted_squared_gausses_distance]
         results.append(chunk_results)
-    colors, opacities, depths, kl_divs, n_rendering_samples, mip_loss = [
+    colors, opacities, depths, kl_divs, n_rendering_samples, mip_loss, weighted_squared_gausses_distances = [
         torch.cat(r, dim=0) if isinstance(r[0], torch.Tensor) else r
         for r in zip(*results)
     ]
@@ -146,6 +130,7 @@ def render_image_with_occgrid(
         kl_divs.view((*rays_shape[:-1], -1)),
         sum(n_rendering_samples),
         mip_loss.view((*rays_shape[:-1], -1)),
+        weighted_squared_gausses_distances
     )
 
 
